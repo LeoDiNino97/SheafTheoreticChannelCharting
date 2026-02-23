@@ -184,12 +184,14 @@ class SiameseNeuralNetwork(pl.LightningModule):
             embN = self.decoder(self.encoder(xN))
         else:
             embN = None
-            
+
         test_loss = self.siamese(embA, embP, embN, y)
         self.log('Test loss:', test_loss)
 
     def configure_optimizers(
         self
     ) -> None:
-        pass
+    
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        return optimizer
 
