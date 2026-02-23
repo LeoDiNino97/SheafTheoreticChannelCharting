@@ -1,5 +1,8 @@
+''' layers.py
+Module containing wrappers for distance and loss computation for Siamese logic in neural networks
+'''
+
 import torch 
-import pytorch_lightning as pl 
 import torch.nn as nn
 import torch.nn.functional as F 
 
