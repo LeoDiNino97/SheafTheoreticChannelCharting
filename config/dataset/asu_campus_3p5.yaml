@@ -1,0 +1,13 @@
+scenario: asu_campus_3p5
+download: true
+
+batch_size: 16
+num_workers: 0
+shuffle: true
+pin_memory: true
+
+num_users: 100
+T_min: 20
+T_max: 60
+
+compute_channels:

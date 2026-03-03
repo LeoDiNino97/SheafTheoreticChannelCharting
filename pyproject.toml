@@ -34,3 +34,8 @@ dependencies = [
     "tqdm>=4.66",
     "wandb>=0.16",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+]

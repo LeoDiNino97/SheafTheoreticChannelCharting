@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+  - dataset: asu_campus_3p5
+  - model: siameseNN
+
+logger:
+  save_dir: checkpoints
+  project: cayley_nn
+
+seed: 1218
