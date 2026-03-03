@@ -2,20 +2,20 @@
 Module containing classes implemented as in "Siamese Neural Networks for Wireless Positioning and Channel Charting"
 """
 
-import pytorch_lightning as pl
+import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.layers import *
+from src.layers import SiameseLayer
 
 
 class Encoder(nn.Module):
     def __init__(
         self,
-        in_dim: int = 256,
+        in_dim: int,
         out_dim: int = 2,
-        num_hidden_layers: int = 6,
+        num_hidden_layers: int = 3,
     ) -> None:
         super().__init__()
         self.in_dim = in_dim
@@ -26,9 +26,9 @@ class Encoder(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        dim = in_dim * 2
+        dim = in_dim
 
-        for i in range(self.num_hidden_layers - 1):
+        for _ in range(self.num_hidden_layers - 1):
             self.layers.append(nn.Linear(dim, dim // 2))
             dim = dim // 2
 
@@ -56,9 +56,9 @@ class Decoder(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        dim = in_dim * 2
+        dim = in_dim
 
-        for i in range(self.num_hidden_layers - 1):
+        for _ in range(self.num_hidden_layers - 1):
             self.layers.append(nn.Linear(dim, dim * 2))
             dim = dim * 2
 
@@ -70,24 +70,25 @@ class Decoder(nn.Module):
         return self.layers[-1](x)
 
 
-class SiameseNeuralNetwork(pl.LightningModule):
+class SiameseNN(L.LightningModule):
     def __init__(
         self,
-        arch: str,
         distance_mode: str,
         loss_mode: str,
-        in_dim: int = 256,
-        out_dim: int = None,
+        in_dim: int,
+        autoenc: bool = False,
+        out_dim: int = 2,
         num_hidden_layers: int = 6,
         margin: float = 1.0,
+        lr: float = 1e-3,
+        **kwargs,
     ) -> None:
         super().__init__()
 
-        assert arch in ["Encoder", "Autoencoder"], "Provide a valid architecture flag"
         assert distance_mode in ["euclidean", "cosine"], "Provide a valid distance mode"
         assert loss_mode in ["contrastive", "triplet"], "Provide a valid layer mode"
 
-        self.arch = arch
+        self.autoenc = autoenc
         self.distance_mode = distance_mode
         self.loss_mode = loss_mode
 
@@ -95,8 +96,9 @@ class SiameseNeuralNetwork(pl.LightningModule):
         self.out_dim = out_dim
         self.num_hidden_layers = num_hidden_layers
         self.margin = margin
+        self.lr = lr
 
-        if arch == "Autoencoder":
+        if autoenc:
             assert in_dim == out_dim, (
                 "Unsolvable design choices! Provide a combination for in and out dimension coherent with the chosen architecture"
             )
@@ -111,13 +113,15 @@ class SiameseNeuralNetwork(pl.LightningModule):
             self.siamese = SiameseLayer(
                 loss_mode=loss_mode,
                 distance_mode=distance_mode,
-                in_dim=in_dim,
+                # in_dim=in_dim,
                 margin=margin,
             )
 
         else:
             self.encoder = Encoder(
-                in_dim=in_dim, out_dim=out_dim, num_hidden_layers=num_hidden_layers
+                in_dim=in_dim,
+                out_dim=out_dim,
+                num_hidden_layers=num_hidden_layers,
             )
 
             self.decoder = nn.Identity()
@@ -125,7 +129,7 @@ class SiameseNeuralNetwork(pl.LightningModule):
             self.siamese = SiameseLayer(
                 loss_mode=loss_mode,
                 distance_mode=distance_mode,
-                in_dim=out_dim,
+                # in_dim=out_dim,
                 margin=margin,
             )
 
@@ -138,7 +142,7 @@ class SiameseNeuralNetwork(pl.LightningModule):
             embN = self.decoder(self.encoder(xN))
         else:
             embN = None
-        train_loss = self.siamese(embA, embP, embN, y)
+        train_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Training loss:", train_loss)
 
     def validation_step(self, batch, batch_idx) -> None:
@@ -150,7 +154,7 @@ class SiameseNeuralNetwork(pl.LightningModule):
             embN = self.decoder(self.encoder(xN))
         else:
             embN = None
-        val_loss = self.siamese(embA, embP, embN, y)
+        val_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Validation loss", val_loss)
 
     def test_step(self, batch, batch_idx) -> None:
@@ -163,10 +167,10 @@ class SiameseNeuralNetwork(pl.LightningModule):
         else:
             embN = None
 
-        test_loss = self.siamese(embA, embP, embN, y)
+        test_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Test loss:", test_loss)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer

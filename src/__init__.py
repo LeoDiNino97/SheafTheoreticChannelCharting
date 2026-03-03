@@ -1,4 +1,4 @@
 from .datamodule import CSIDataModule
-from .models import SiameseNeuralNetwork
+from .models import SiameseNN
 
-__all__ = ["SiameseNeuralNetwork", "CSIDataModule"]
+__all__ = ["SiameseNN", "CSIDataModule"]

@@ -5,6 +5,6 @@ defaults:
 
 logger:
   save_dir: checkpoints
-  project: cayley_nn
+  project: sheaf_cc
 
 seed: 1218

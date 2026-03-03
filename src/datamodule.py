@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 import deepmimo as dm
 import lightning as L
+import numpy as np
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
@@ -55,6 +56,15 @@ class CSIDataModule(L.LightningDataModule):
             ds0.compute_channels(**ch_kwargs)
         except TypeError:
             ds0.compute_channels()
+
+        ch = ds0.channels
+        if ch is None:
+            raise RuntimeError(
+                "DeepMIMO: ds0.channels is None after compute_channels()."
+            )
+
+        per_sample_complex = int(np.prod(ch.shape[1:]))
+        self.feature_dim = 2 * per_sample_complex
 
         self.dataset = TrajectoryCSIDataset(
             rx_pos=ds0.rx_pos,

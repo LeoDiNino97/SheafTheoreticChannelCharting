@@ -53,10 +53,10 @@ class LossLayer(nn.Module):
 
     def forward(
         self,
-        z1: torch.Tensor = None,
-        z2: torch.Tensor = None,
-        z3: torch.Tensor = None,
-        y: torch.Tensor = None,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+        y: torch.Tensor,
+        z3: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
 
         if self.loss_mode == "contrastive":
@@ -84,7 +84,7 @@ class SiameseLayer(nn.Module):
         self,
         loss_mode: str,
         distance_mode: str,
-        in_dim: int,
+        # in_dim: int,
         margin: float,
     ) -> None:
 
@@ -95,7 +95,7 @@ class SiameseLayer(nn.Module):
         self.loss_mode = loss_mode
         self.distance_mode = distance_mode
 
-        self.in_dim = in_dim
+        # self.in_dim = in_dim
         self.margin = margin
 
         self.loss_func = LossLayer(
@@ -104,9 +104,9 @@ class SiameseLayer(nn.Module):
 
     def forward(
         self,
-        z1: torch.Tensor = None,
-        z2: torch.Tensor = None,
-        z3: torch.Tensor = None,
-        y: torch.Tensor = None,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+        y: torch.Tensor,
+        z3: Optional[torch.Tensor] = None,
     ) -> None:
         return self.loss_func(z1=z1, z2=z2, z3=z3, y=y)
