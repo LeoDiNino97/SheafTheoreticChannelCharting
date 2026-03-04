@@ -99,7 +99,9 @@ class SiameseLayer(nn.Module):
         self.margin = margin
 
         self.loss_func = LossLayer(
-            margin=margin, loss_mode=loss_mode, distance_mode=distance_mode
+            margin=margin,
+            loss_mode=loss_mode,
+            distance_mode=distance_mode,
         )
 
     def forward(

@@ -1,11 +1,11 @@
 _target_: src.SiameseNN
 
 autoenc: false
-distance_mode: cosine
-loss_mode: triplet
+distance_mode: euclidean
+loss_mode: contrastive
 out_dim: 2
 num_hidden_layers: 6
-margin: 1.0
+margin: 1e-3
 
 max_epochs: 5
 lr: 1e-1

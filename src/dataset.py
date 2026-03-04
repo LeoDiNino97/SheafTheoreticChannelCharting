@@ -174,7 +174,10 @@ class TrajectoryCSIDataset(Dataset):
         return pos[pos != anchor_idx]
 
     def get_negative_examples(
-        self, anchor_idx: int, window: int, include_same_user_outside_window: bool
+        self,
+        anchor_idx: int,
+        window: int,
+        include_same_user_outside_window: bool = True,
     ) -> np.ndarray:
         uid = int(self._user_of_index[anchor_idx])
         t0 = int(self._t_of_index[anchor_idx])

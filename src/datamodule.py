@@ -41,7 +41,8 @@ class CSIDataModule(L.LightningDataModule):
     def __init__(self, dataset_cfg: DictConfig | Dict[str, Any]):
         super().__init__()
         self.cfg = _merge_defaults(self.DEFAULTS, dataset_cfg)
-        self.dataset = None
+        self.train_dataset = None
+        self.test_dataset = None
 
     def prepare_data(self) -> None:
         if self.cfg["download"] and hasattr(dm, "download"):
@@ -66,7 +67,22 @@ class CSIDataModule(L.LightningDataModule):
         per_sample_complex = int(np.prod(ch.shape[1:]))
         self.feature_dim = 2 * per_sample_complex
 
-        self.dataset = TrajectoryCSIDataset(
+        self.train_dataset = TrajectoryCSIDataset(
+            rx_pos=ds0.rx_pos,
+            H_users=ds0.channels,
+            num_users=int(self.cfg["num_users"]),
+            T_min=int(self.cfg["T_min"]),
+            T_max=int(self.cfg["T_max"]),
+            seed=int(self.cfg["seed"]),
+            pair_mode=str(self.cfg["pair_mode"]),
+            window=int(self.cfg["window"]),
+            include_same_user_outside_window=bool(
+                self.cfg["include_same_user_outside_window"]
+            ),
+            p_positive=float(self.cfg["p_positive"]),
+        )
+
+        self.test_dataset = TrajectoryCSIDataset(
             rx_pos=ds0.rx_pos,
             H_users=ds0.channels,
             num_users=int(self.cfg["num_users"]),
@@ -83,7 +99,7 @@ class CSIDataModule(L.LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
-            self.dataset,
+            self.train_dataset,
             batch_size=int(self.cfg["batch_size"]),
             shuffle=bool(self.cfg["shuffle"]),
             num_workers=int(self.cfg["num_workers"]),
