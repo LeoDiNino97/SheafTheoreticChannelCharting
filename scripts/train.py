@@ -16,12 +16,11 @@ from src import CSIDataModule
 
 
 @hydra.main(
-    config_path="../config",
-    config_name="train",
-    version_base="1.3",
+    config_path='../config',
+    config_name='train',
+    version_base='1.3',
 )
 def main(cfg: DictConfig):
-
     # -----------------------------
     # Load DeepMIMO
     # -----------------------------
@@ -46,8 +45,8 @@ def main(cfg: DictConfig):
     # -----------------------------
     trainer = L.Trainer(
         max_epochs=cfg.model.max_epochs,
-        accelerator="auto",
-        devices="auto",
+        accelerator='auto',
+        devices='auto',
         log_every_n_steps=10,
         logger=wandb_logger,
     )
@@ -55,5 +54,5 @@ def main(cfg: DictConfig):
     trainer.fit(model, datamodule=dm)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

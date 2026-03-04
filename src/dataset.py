@@ -20,7 +20,8 @@ class TrajectoryCSIDataset(Dataset):
 
     Positives: same user_id, |dt|<=window, excluding anchor
     Negatives: different user_id (always)
-               optionally include same-user but |dt|>window if include_same_user_outside_window=True
+               optionally include same-user but |dt|>window if
+               include_same_user_outside_window=True
     """
 
     def __init__(
@@ -30,7 +31,7 @@ class TrajectoryCSIDataset(Dataset):
         num_users: int = 500,
         T_min: int = 32,
         T_max: int = 128,
-        kinds=("linear", "circular", "random"),
+        kinds=('linear', 'circular', 'random'),
         linear_len=(20.0, 120.0),
         circle_r=(10.0, 60.0),
         random_step=(1.0, 5.0),
@@ -39,16 +40,18 @@ class TrajectoryCSIDataset(Dataset):
         z_max=None,
         seed: int = 0,
         # --- Siamese sampling controls ---
-        pair_mode: str = "triplet",  # "triplet" or "contrastive"
+        pair_mode: str = 'triplet',  # "triplet" or "contrastive"
         window: int = 3,
         include_same_user_outside_window: bool = False,  # for negatives
         p_positive: float = 0.5,  # only for contrastive
     ):
         super().__init__()
-        assert pair_mode in ("triplet", "contrastive")
+        assert pair_mode in ('triplet', 'contrastive')
         self.pair_mode = pair_mode
         self.window = int(window)
-        self.include_same_user_outside_window = bool(include_same_user_outside_window)
+        self.include_same_user_outside_window = bool(
+            include_same_user_outside_window
+        )
         self.p_positive = float(p_positive)
 
         self.rng = np.random.default_rng(seed)
@@ -60,7 +63,7 @@ class TrajectoryCSIDataset(Dataset):
 
         H_users = np.asarray(H_users)
         if H_users.shape[0] != rx_pos.shape[0]:
-            raise ValueError("H_users first dim must match rx_pos first dim")
+            raise ValueError('H_users first dim must match rx_pos first dim')
         self.H_users = H_users
 
         # Filter candidate RX points (optional)
@@ -72,7 +75,7 @@ class TrajectoryCSIDataset(Dataset):
 
         self.valid_idxs = np.where(mask)[0]
         if len(self.valid_idxs) < 10:
-            raise ValueError("Too few valid RX points after filtering.")
+            raise ValueError('Too few valid RX points after filtering.')
         self.rx_pos = rx_pos[self.valid_idxs]
         self.rx_xy = self.rx_pos[:, :2]
         self.kdtree = KDTree(self.rx_xy)
@@ -81,7 +84,7 @@ class TrajectoryCSIDataset(Dataset):
         self.T_min = int(T_min)
         self.T_max = int(T_max)
         if self.T_min < 2 or self.T_max < self.T_min:
-            raise ValueError("Bad T_min/T_max")
+            raise ValueError('Bad T_min/T_max')
         self.kinds = tuple(kinds)
 
         self.linear_len = linear_len
@@ -111,9 +114,9 @@ class TrajectoryCSIDataset(Dataset):
         # user -> global indices (contiguous, but keep general)
         self.user_to_indices = {}
         for uid in range(self.num_users):
-            self.user_to_indices[uid] = np.where(self._user_of_index == uid)[0].astype(
-                np.int64
-            )
+            self.user_to_indices[uid] = np.where(self._user_of_index == uid)[
+                0
+            ].astype(np.int64)
 
     # ----------------- snapping -----------------
     def _snap(self, xy: np.ndarray) -> np.ndarray:
@@ -125,7 +128,7 @@ class TrajectoryCSIDataset(Dataset):
         return self.rx_xy[int(self.rng.integers(0, len(self.rx_xy)))].copy()
 
     def _generate_one(self, kind: str, T: int) -> np.ndarray:
-        if kind == "linear":
+        if kind == 'linear':
             start = self._rand_anchor_xy()
             L = float(self.rng.uniform(*self.linear_len))
             ang = float(self.rng.uniform(0, 2 * np.pi))
@@ -134,37 +137,44 @@ class TrajectoryCSIDataset(Dataset):
             xy = start * (1 - s)[:, None] + end * s[:, None]
             return self._snap(xy)
 
-        if kind == "circular":
+        if kind == 'circular':
             center = self._rand_anchor_xy()
             r = float(self.rng.uniform(*self.circle_r))
             phase = float(self.rng.uniform(0, 2 * np.pi))
             ang = np.linspace(0.0, 2 * np.pi, T, endpoint=False) + phase
             xy = np.stack(
-                [center[0] + r * np.cos(ang), center[1] + r * np.sin(ang)], axis=1
+                [center[0] + r * np.cos(ang), center[1] + r * np.sin(ang)],
+                axis=1,
             )
             return self._snap(xy)
 
-        if kind == "random":
+        if kind == 'random':
             xy = np.empty((T, 2), dtype=np.float64)
             xy[0] = self._rand_anchor_xy()
             prev_dir = None
             for t in range(1, T):
                 step = float(self.rng.uniform(*self.random_step))
-                if prev_dir is None or self.rng.random() > self.random_keep_dir:
+                if (
+                    prev_dir is None
+                    or self.rng.random() > self.random_keep_dir
+                ):
                     ang = float(self.rng.uniform(0, 2 * np.pi))
                 else:
                     ang = float(
-                        np.arctan2(prev_dir[1], prev_dir[0]) + self.rng.normal(0, 0.5)
+                        np.arctan2(prev_dir[1], prev_dir[0])
+                        + self.rng.normal(0, 0.5)
                     )
                 d = np.array([np.cos(ang), np.sin(ang)])
                 xy[t] = xy[t - 1] + step * d
                 prev_dir = d
             return self._snap(xy)
 
-        raise ValueError(f"Unknown kind: {kind}")
+        raise ValueError(f'Unknown kind: {kind}')
 
     # ----------------- mining -----------------
-    def get_positive_examples(self, anchor_idx: int, window: int) -> np.ndarray:
+    def get_positive_examples(
+        self, anchor_idx: int, window: int
+    ) -> np.ndarray:
         uid = int(self._user_of_index[anchor_idx])
         t0 = int(self._t_of_index[anchor_idx])
         user_indices = self.user_to_indices[uid]
@@ -220,7 +230,7 @@ class TrajectoryCSIDataset(Dataset):
             p_idx = index  # degenerate fallback
 
         # Triplet
-        if self.pair_mode == "triplet":
+        if self.pair_mode == 'triplet':
             n_idx = self._pick_one(neg)
             if n_idx < 0:
                 n_idx = index
@@ -235,7 +245,8 @@ class TrajectoryCSIDataset(Dataset):
             y = torch.tensor(-1, dtype=torch.long)  # <-- IMPORTANT
             return xA, xP, xN, y
 
-        # Contrastive: sample positive pair with prob p_positive else negative pair
+        # Contrastive:
+        # sample positive pair with prob p_positive else negative pair
         if self.rng.random() < self.p_positive:
             H_P = self._H_from_global_index(p_idx)
             xA = csi_to_realvec(H_A)

@@ -1,5 +1,6 @@
 """layers.py
-Module containing classes implemented as in "Siamese Neural Networks for Wireless Positioning and Channel Charting"
+Module containing classes implemented as in
+"Siamese Neural Networks for Wireless Positioning and Channel Charting"
 """
 
 import lightning as L
@@ -85,8 +86,12 @@ class SiameseNN(L.LightningModule):
     ) -> None:
         super().__init__()
 
-        assert distance_mode in ["euclidean", "cosine"], "Provide a valid distance mode"
-        assert loss_mode in ["contrastive", "triplet"], "Provide a valid layer mode"
+        assert distance_mode in ['euclidean', 'cosine'], (
+            'Provide a valid distance mode'
+        )
+        assert loss_mode in ['contrastive', 'triplet'], (
+            'Provide a valid layer mode'
+        )
 
         self.autoenc = autoenc
         self.distance_mode = distance_mode
@@ -100,7 +105,8 @@ class SiameseNN(L.LightningModule):
 
         if autoenc:
             assert in_dim == out_dim, (
-                "Unsolvable design choices! Provide a combination for in and out dimension coherent with the chosen architecture"
+                'Unsolvable design choices! Provide a combination for in'
+                'and out dimension coherent with the chosen architecture'
             )
             self.encoder = Encoder(
                 in_dim=in_dim, out_dim=2, num_hidden_layers=num_hidden_layers
@@ -134,40 +140,33 @@ class SiameseNN(L.LightningModule):
             )
 
     def forward(self, batch) -> None:
-        '''
+        """
         Wrapper for the forward pass in all lightning steps
-        '''
+        """
         xA, xP, xN, y = batch
         embA = self.decoder(self.encoder(xA))
         embP = self.decoder(self.encoder(xP))
-        if xN is not None:
-            embN = self.decoder(self.encoder(xN))
-        else:
-            embN = None
+        embN = self.decoder(self.encoder(xN)) if xN is not None else None
         return embA, embP, embN, y
 
     def training_step(self, batch, batch_idx) -> None:
-
         embA, embP, embN, y = self.forward(batch)
         train_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
-        self.log("Training loss:", train_loss)
+        self.log('Training loss:', train_loss)
         return train_loss
 
     def validation_step(self, batch, batch_idx) -> None:
-
-        embA, embP, embN, y= self.forward(batch)
+        embA, embP, embN, y = self.forward(batch)
         val_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
-        self.log("Validation loss", val_loss)
+        self.log('Validation loss', val_loss)
         return val_loss
 
     def test_step(self, batch, batch_idx) -> None:
-
         embA, embP, embN, y = self.forward(batch)
         test_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
-        self.log("Test loss:", test_loss)
+        self.log('Test loss:', test_loss)
         return test_loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
