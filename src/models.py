@@ -133,8 +133,10 @@ class SiameseNN(L.LightningModule):
                 margin=margin,
             )
 
-    def training_step(self, batch, batch_idx) -> None:
-
+    def forward(self, batch) -> None:
+        '''
+        Wrapper for the forward pass in all lightning steps
+        '''
         xA, xP, xN, y = batch
         embA = self.decoder(self.encoder(xA))
         embP = self.decoder(self.encoder(xP))
@@ -142,33 +144,28 @@ class SiameseNN(L.LightningModule):
             embN = self.decoder(self.encoder(xN))
         else:
             embN = None
+        return embA, embP, embN, y
+
+    def training_step(self, batch, batch_idx) -> None:
+
+        embA, embP, embN, y = self.forward(batch)
         train_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Training loss:", train_loss)
+        return train_loss
 
     def validation_step(self, batch, batch_idx) -> None:
 
-        xA, xP, xN, y = batch
-        embA = self.decoder(self.encoder(xA))
-        embP = self.decoder(self.encoder(xP))
-        if xN is not None:
-            embN = self.decoder(self.encoder(xN))
-        else:
-            embN = None
+        embA, embP, embN, y= self.forward(batch)
         val_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Validation loss", val_loss)
+        return val_loss
 
     def test_step(self, batch, batch_idx) -> None:
 
-        xA, xP, xN, y = batch
-        embA = self.decoder(self.encoder(xA))
-        embP = self.decoder(self.encoder(xP))
-        if xN is not None:
-            embN = self.decoder(self.encoder(xN))
-        else:
-            embN = None
-
+        embA, embP, embN, y = self.forward(batch)
         test_loss = self.siamese(z1=embA, z2=embP, z3=embN, y=y)
         self.log("Test loss:", test_loss)
+        return test_loss
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
 

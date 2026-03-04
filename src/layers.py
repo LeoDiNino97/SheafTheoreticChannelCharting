@@ -74,6 +74,7 @@ class LossLayer(nn.Module):
 
             dAP = self.dist_layer(z1, z2)
             dAN = self.dist_layer(z1, z3)
+            print(dAP, dAN)
             L = torch.clamp(dAP - dAN + self.margin, min=0.0)
 
         return L.mean()
