@@ -52,18 +52,19 @@ class DistanceLayer(nn.Module):
         torch.Tensor | None
             Pairwise distance for each batch element.
         """
-        if self.distance_mode == 'euclidean':
-            # Standard Euclidean distance between vectors
-            return F.pairwise_distance(z1, z2)
+        match self.distance_mode:
+            case 'euclidean':
+                # Standard Euclidean distance between vectors
+                return F.pairwise_distance(z1, z2)
 
-        elif self.distance_mode == 'cosine':
-            # Cosine distance (1 - cosine similarity)
-            z1 = F.normalize(z1, dim=-1)
-            z2 = F.normalize(z2, dim=-1)
-            return 1 - F.cosine_similarity(z1, z2, dim=-1)
+            case 'cosine':
+                # Cosine distance (1 - cosine similarity)
+                z1 = F.normalize(z1, dim=-1)
+                z2 = F.normalize(z2, dim=-1)
+                return 1 - F.cosine_similarity(z1, z2, dim=-1)
 
-        else:
-            return None
+            case _:
+                return None
 
 
 class LossLayer(nn.Module):
