@@ -13,7 +13,6 @@ This module defines:
 import lightning as L
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from src.layers import SiameseLayer
 
@@ -54,7 +53,7 @@ class Encoder(nn.Module):
         self.num_hidden_layers = num_hidden_layers
 
         # Activation function used between hidden layers
-        self.act = F.relu
+        self.act = nn.ReLU()
 
         # Container for linear layers
         self.layers = nn.ModuleList()
@@ -132,7 +131,7 @@ class Decoder(nn.Module):
         self.num_hidden_layers = num_hidden_layers
 
         # Activation function
-        self.act = F.relu
+        self.act = nn.ReLU()
 
         # Container for decoder layers
         self.layers = nn.ModuleList()
