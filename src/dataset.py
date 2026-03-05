@@ -4,24 +4,73 @@ from scipy.spatial import cKDTree as KDTree
 from torch.utils.data import Dataset
 
 
-def csi_to_realvec(H: torch.Tensor) -> torch.Tensor:
+def csi_to_realvec(
+    H: torch.Tensor,
+) -> torch.Tensor:
     """
-    Convert complex CSI tensor (...) -> float vector (D,)
+    Convert a complex CSI tensor into a real-valued vector.
+
+    Parameters
+    ----------
+    H : torch.Tensor
+        Complex-valued CSI tensor, shape (...).
+
+    Returns
+    -------
+    torch.Tensor
+        Real-valued vector, shape (D,), where D = 2 * product of H dims
+        except the first (sample) dimension.
     """
+    # Flatten complex tensor into real vector (real + imag)
     return torch.view_as_real(H).reshape(-1).float()
 
 
 class TrajectoryCSIDataset(Dataset):
     """
-    Produces Siamese batches directly.
+    Dataset producing Siamese batches for CSI trajectory learning.
 
-    triplet:    returns (xA, xP, xN, y=None)
-    contrastive returns (xA, xP, xN=None, y in {0,1})
+    Supports two sampling modes:
 
-    Positives: same user_id, |dt|<=window, excluding anchor
-    Negatives: different user_id (always)
-               optionally include same-user but |dt|>window if
-               include_same_user_outside_window=True
+    - 'triplet': returns (xA, xP, xN, y=-1)
+    - 'contrastive': returns (xA, xP, xN=None, y in {0,1})
+
+    Positives:
+        Same user, |dt| <= window, excluding anchor.
+    Negatives:
+        Different user always, optionally same user outside window if
+        include_same_user_outside_window=True.
+
+    Parameters
+    ----------
+    rx_pos : np.ndarray
+        Positions of receiver antennas, shape (N_rx, 2 or 3).
+    H_users : np.ndarray
+        CSI data per RX position, shape (N_rx, ...).
+    num_users : int, optional
+        Number of simulated users (default: 500).
+    T_min : int, optional
+        Minimum trajectory length (default: 32).
+    T_max : int, optional
+        Maximum trajectory length (default: 128).
+    kinds : tuple, optional
+        Trajectory types: 'linear', 'circular', 'random' (default all).
+    pair_mode : str, optional
+        'triplet' or 'contrastive' (default: 'triplet').
+    window : int, optional
+        Time window for positive sampling (default: 3).
+    include_same_user_outside_window : bool, optional
+        Include same-user points outside window as negatives
+        (default: False).
+    p_positive : float, optional
+        Probability of positive pair in contrastive mode (default: 0.5).
+    seed : int, optional
+        Random seed (default: 0).
+
+    Notes
+    -----
+    - Converts complex CSI to real-valued vectors with `csi_to_realvec`.
+    - Builds variable-length trajectories per user at initialization.
+    - Provides methods to sample positives and negatives efficiently.
     """
 
     def __init__(
@@ -46,6 +95,8 @@ class TrajectoryCSIDataset(Dataset):
         p_positive: float = 0.5,  # only for contrastive
     ):
         super().__init__()
+
+        # Siamese sampling configuration
         assert pair_mode in ('triplet', 'contrastive')
         self.pair_mode = pair_mode
         self.window = int(window)
@@ -56,11 +107,13 @@ class TrajectoryCSIDataset(Dataset):
 
         self.rng = np.random.default_rng(seed)
 
+        # Convert RX positions to array, ensure 3D coordinates
         rx_pos = np.asarray(rx_pos, dtype=np.float64)
         if rx_pos.shape[1] == 2:
             rx_pos = np.c_[rx_pos, np.zeros((rx_pos.shape[0], 1))]
         self.rx_pos_all = rx_pos
 
+        # Convert CSI to array and validate dimensions
         H_users = np.asarray(H_users)
         if H_users.shape[0] != rx_pos.shape[0]:
             raise ValueError('H_users first dim must match rx_pos first dim')
@@ -98,36 +151,86 @@ class TrajectoryCSIDataset(Dataset):
         self._rx_of_index = []
 
         for user_id in range(self.num_users):
+            # Random trajectory length
             T = int(self.rng.integers(self.T_min, self.T_max + 1))
+
+            # Randomly pick trajectory kind
             kind = self.kinds[int(self.rng.integers(0, len(self.kinds)))]
+
+            # Generate trajectory of RX indices
             rx_idxs = self._generate_one(kind, T)
 
+            # Store per-step info for sampling
             for t, rx in enumerate(rx_idxs):
                 self._user_of_index.append(user_id)
                 self._t_of_index.append(t)
                 self._rx_of_index.append(int(rx))
 
+        # Convert to arrays for fast indexing
         self._user_of_index = np.asarray(self._user_of_index, dtype=np.int64)
         self._t_of_index = np.asarray(self._t_of_index, dtype=np.int64)
         self._rx_of_index = np.asarray(self._rx_of_index, dtype=np.int64)
 
-        # user -> global indices (contiguous, but keep general)
+        # Map user -> global indices (contiguous, but keep general)
         self.user_to_indices = {}
         for uid in range(self.num_users):
             self.user_to_indices[uid] = np.where(self._user_of_index == uid)[
                 0
             ].astype(np.int64)
 
-    # ----------------- snapping -----------------
-    def _snap(self, xy: np.ndarray) -> np.ndarray:
+    # ----------------- Snapping helpers -----------------
+    def _snap(
+        self,
+        xy: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Snap 2D coordinates to the nearest valid RX index.
+
+        Parameters
+        ----------
+        xy : np.ndarray
+            XY coordinates of shape (2,) or (N,2).
+
+        Returns
+        -------
+        np.ndarray
+            Indices of nearest valid RX positions.
+        """
         _, idx_local = self.kdtree.query(xy, k=1)
         return self.valid_idxs[idx_local].astype(np.int64)
 
-    # ----------------- generators -----------------
+    # ----------------- Trajectory generators -----------------
     def _rand_anchor_xy(self) -> np.ndarray:
+        """
+        Pick a random RX XY coordinate to serve as a trajectory anchor.
+
+        Returns
+        -------
+        np.ndarray
+            Selected XY coordinate (2,).
+        """
         return self.rx_xy[int(self.rng.integers(0, len(self.rx_xy)))].copy()
 
-    def _generate_one(self, kind: str, T: int) -> np.ndarray:
+    def _generate_one(
+        self,
+        kind: str,
+        T: int,
+    ) -> np.ndarray:
+        """
+        Generate a trajectory of length T of the specified kind.
+
+        Parameters
+        ----------
+        kind : str
+            One of 'linear', 'circular', or 'random'.
+        T : int
+            Trajectory length.
+
+        Returns
+        -------
+        np.ndarray
+            Array of RX indices representing the trajectory.
+        """
         if kind == 'linear':
             start = self._rand_anchor_xy()
             L = float(self.rng.uniform(*self.linear_len))
@@ -173,8 +276,28 @@ class TrajectoryCSIDataset(Dataset):
 
     # ----------------- mining -----------------
     def get_positive_examples(
-        self, anchor_idx: int, window: int
+        self,
+        anchor_idx: int,
+        window: int,
     ) -> np.ndarray:
+        """
+        Return indices of positive samples for the given anchor.
+
+        Positives are from the same user and within +/- window steps
+        around the anchor, excluding the anchor itself.
+
+        Parameters
+        ----------
+        anchor_idx : int
+            Index of the anchor sample.
+        window : int
+            Time window for selecting positives.
+
+        Returns
+        -------
+        np.ndarray
+            Indices of positive samples.
+        """
         uid = int(self._user_of_index[anchor_idx])
         t0 = int(self._t_of_index[anchor_idx])
         user_indices = self.user_to_indices[uid]
@@ -189,6 +312,26 @@ class TrajectoryCSIDataset(Dataset):
         window: int,
         include_same_user_outside_window: bool = True,
     ) -> np.ndarray:
+        """
+        Return indices of negative samples for the given anchor.
+
+        Negatives include all samples from different users. Optionally,
+        same-user samples outside the window can also be included.
+
+        Parameters
+        ----------
+        anchor_idx : int
+            Index of the anchor sample.
+        window : int
+            Time window for positive samples (used to exclude near positives).
+        include_same_user_outside_window : bool
+            Whether to include same-user samples outside the window.
+
+        Returns
+        -------
+        np.ndarray
+            Indices of negative samples.
+        """
         uid = int(self._user_of_index[anchor_idx])
         t0 = int(self._t_of_index[anchor_idx])
 
@@ -203,20 +346,66 @@ class TrajectoryCSIDataset(Dataset):
 
         return neg
 
+    # ----------------- CSI helpers -----------------
     def _H_from_global_index(self, gidx: int) -> torch.Tensor:
+        """
+        Return the CSI tensor for the given global index.
+
+        Parameters
+        ----------
+        gidx : int
+            Global index into the flattened trajectory dataset.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex CSI tensor for the corresponding RX location.
+        """
         rx_idx = int(self._rx_of_index[gidx])
         return torch.from_numpy(self.H_users[rx_idx])  # complex tensor
 
     def _pick_one(self, idxs: np.ndarray) -> int:
+        """
+        Randomly select one index from a list of indices.
+
+        Parameters
+        ----------
+        idxs : np.ndarray
+            Array of candidate indices.
+
+        Returns
+        -------
+        int
+            Randomly selected index, or -1 if input is empty.
+        """
         if idxs is None or len(idxs) == 0:
             return -1
         return int(idxs[int(self.rng.integers(0, len(idxs)))])
 
     # ----------------- Dataset API -----------------
     def __len__(self) -> int:
+        """
+        Return the total number of samples in the dataset.
+
+        Returns
+        -------
+        int
+            Total number of trajectory points across all users.
+        """
         return int(self._user_of_index.shape[0])
 
-    def __getitem__(self, index: int):
+    def __getitem__(
+        self,
+        index: int,
+    ):
+        """
+        Return one Siamese sample depending on pair_mode.
+
+        Returns
+        -------
+        xA, xP, xN, y
+            CSI vectors and label / placeholder.
+        """
         # Anchor
         H_A = self._H_from_global_index(index)
 
