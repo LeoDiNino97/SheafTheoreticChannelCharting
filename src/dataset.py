@@ -418,37 +418,39 @@ class TrajectoryCSIDataset(Dataset):
         if p_idx < 0:
             p_idx = index  # degenerate fallback
 
-        # Triplet
-        if self.pair_mode == 'triplet':
-            n_idx = self._pick_one(neg)
-            if n_idx < 0:
-                n_idx = index
+        match self.pair_mode:
+            case 'triplet':
+                # Triplet
+                n_idx = self._pick_one(neg)
+                if n_idx < 0:
+                    n_idx = index
 
-            H_P = self._H_from_global_index(p_idx)
-            H_N = self._H_from_global_index(n_idx)
+                H_P = self._H_from_global_index(p_idx)
+                H_N = self._H_from_global_index(n_idx)
 
-            xA = csi_to_realvec(H_A)
-            xP = csi_to_realvec(H_P)
-            xN = csi_to_realvec(H_N)
+                xA = csi_to_realvec(H_A)
+                xP = csi_to_realvec(H_P)
+                xN = csi_to_realvec(H_N)
 
-            y = torch.tensor(-1, dtype=torch.long)  # <-- IMPORTANT
-            return xA, xP, xN, y
+                y = torch.tensor(-1, dtype=torch.long)  # <-- IMPORTANT
 
-        # Contrastive:
-        # sample positive pair with prob p_positive else negative pair
-        if self.rng.random() < self.p_positive:
-            H_P = self._H_from_global_index(p_idx)
-            xA = csi_to_realvec(H_A)
-            xP = csi_to_realvec(H_P)
-            xN = None
-            y = torch.tensor(1, dtype=torch.long)
-        else:
-            n_idx = self._pick_one(neg)
-            if n_idx < 0:
-                n_idx = index
-            H_N = self._H_from_global_index(n_idx)
-            xA = csi_to_realvec(H_A)
-            xP = csi_to_realvec(H_N)  # second element of pair
-            xN = None
-            y = torch.tensor(0, dtype=torch.long)
+            case 'contrastive':
+                # Contrastive:
+                # sample positive pair with prob p_positive else negative pair
+                if self.rng.random() < self.p_positive:
+                    H_P = self._H_from_global_index(p_idx)
+                    xA = csi_to_realvec(H_A)
+                    xP = csi_to_realvec(H_P)
+                    xN = None
+                    y = torch.tensor(1, dtype=torch.long)
+                else:
+                    n_idx = self._pick_one(neg)
+                    if n_idx < 0:
+                        n_idx = index
+                    H_N = self._H_from_global_index(n_idx)
+                    xA = csi_to_realvec(H_A)
+                    xP = csi_to_realvec(H_N)  # second element of pair
+                    xN = None
+                    y = torch.tensor(0, dtype=torch.long)
+
         return xA, xP, xN, y

@@ -53,6 +53,8 @@ def main(cfg: DictConfig):
 
     trainer.fit(model, datamodule=dm)
 
+    return None
+
 
 if __name__ == '__main__':
     main()

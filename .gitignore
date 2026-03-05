@@ -214,6 +214,9 @@ multirun/
 checkpoints/
 sheaf_cc/
 
+# Lightning
+lightning_logs/
+
 # Private files and old code/data
 deepmimo_scenarios/
 trash/
