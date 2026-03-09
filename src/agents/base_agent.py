@@ -30,6 +30,7 @@ class BaseAgent(nn.Module, ABC):
     def __init__(
         self,
         idx: int,
+        n: int
     ):
         """
         Initialize the base agent.
@@ -43,10 +44,18 @@ class BaseAgent(nn.Module, ABC):
 
         self.idx = idx
 
+        # Embedding dimension
+        self.n = n
+
+        # Keep the reference frame in the buffer for proper gradient flowing
+        self.register_buffer("reference_frame", torch.eye(self.n))
+
     @abstractmethod
     def forward(
         self,
-        x: torch.Tensor,
+        xA: torch.Tensor,
+        xP: torch.Tensor,
+        xN: torch.Tensor,
     ) -> torch.Tensor:
         """
         Perform the forward pass of the agent.
@@ -69,7 +78,9 @@ class BaseAgent(nn.Module, ABC):
     @abstractmethod
     def compute_loss(
         self,
-        x: torch.Tensor,
+        xA: torch.Tensor,
+        xP: torch.Tensor,
+        xN: torch.Tensor,
     ) -> torch.Tensor:
         """
         Compute the training loss for the agent.
@@ -89,3 +100,25 @@ class BaseAgent(nn.Module, ABC):
             Scalar tensor representing the loss value for this agent.
         """
         pass
+
+    def reset_epoch_statistics(self):
+        self.cov = torch.zeros((self.n,self.n), device=self.reference_frame.device)
+    
+    def accumulate_statistics(self, E, E_tilde, R_tilde):
+        self.cov += E @ E_tilde.T @ R_tilde.T 
+
+    def update_reference_frame(self):
+        U, _, Vt = torch.linalg.svd(self.cov)
+        with torch.no_grad():
+            self.reference_frame.copy_(
+                (
+                    U @ 
+                    torch.diag(
+                        torch.cat(
+                            [torch.ones(U.shape[1]-1),torch.tensor(torch.linalg.det(U @ Vt))]
+                            )
+                        ) @ 
+                    Vt
+                )
+            )
+
