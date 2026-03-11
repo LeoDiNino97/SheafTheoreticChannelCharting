@@ -228,9 +228,7 @@ class NetworkAgent(L.LightningModule):
 
             - "optimizer": The instantiated AdamW optimizer.
         """
-        optimizer = torch.optimizer.AdamW(
-            self.parameters(), lr=self.hparams.LR
-        )
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.LR)
         return {
             'optimizer': optimizer,
         }
