@@ -27,11 +27,7 @@ class BaseAgent(nn.Module, ABC):
         Unique identifier of the agent instance.
     """
 
-    def __init__(
-        self,
-        idx: int,
-        n: int
-    ):
+    def __init__(self, idx: int, n: int):
         """
         Initialize the base agent.
 
@@ -48,7 +44,7 @@ class BaseAgent(nn.Module, ABC):
         self.n = n
 
         # Keep the reference frame in the buffer for proper gradient flowing
-        self.register_buffer("reference_frame", torch.eye(self.n))
+        self.register_buffer('reference_frame', torch.eye(self.n))
 
     @abstractmethod
     def forward(
@@ -102,23 +98,25 @@ class BaseAgent(nn.Module, ABC):
         pass
 
     def reset_epoch_statistics(self):
-        self.cov = torch.zeros((self.n,self.n), device=self.reference_frame.device)
-    
+        self.cov = torch.zeros(
+            (self.n, self.n), device=self.reference_frame.device
+        )
+
     def accumulate_statistics(self, E, E_tilde, R_tilde):
-        self.cov += E @ E_tilde.T @ R_tilde.T 
+        self.cov += E @ E_tilde.T @ R_tilde.T
 
     def update_reference_frame(self):
         U, _, Vt = torch.linalg.svd(self.cov)
         with torch.no_grad():
             self.reference_frame.copy_(
-                (
-                    U @ 
-                    torch.diag(
-                        torch.cat(
-                            [torch.ones(U.shape[1]-1),torch.tensor(torch.linalg.det(U @ Vt))]
-                            )
-                        ) @ 
-                    Vt
+                U
+                @ torch.diag(
+                    torch.cat(
+                        [
+                            torch.ones(U.shape[1] - 1),
+                            torch.tensor(torch.linalg.det(U @ Vt)),
+                        ]
+                    )
                 )
+                @ Vt
             )
-

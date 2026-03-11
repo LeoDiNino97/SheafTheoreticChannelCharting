@@ -1,6 +1,7 @@
 import lightning as L
-import torch 
+import torch
 import torch.nn as nn
+
 
 class NetworkAgent(L.LightningModule):
     def __init__(
@@ -8,27 +9,19 @@ class NetworkAgent(L.LightningModule):
         agents: list[nn.Module],
         LR: float,
         L: torch.Tensor,
+        B: torch.Tensor,
         n: int,
-        lmb: float = 1.0
-        ):
+        lmb: float = 1.0,
+    ):
         super().__init__()
-        #self.save_hyperparameters()
+        self.save_hyperparameters()
 
         # Agents list
-        self.agents = nn.ModuleList(agents)
-        
-        # Learning rate
-        self.LR = LR
+        self.hparams['agents'] = nn.ModuleList(agents)
 
-        # Weight of regularization
-        self.lmb = lmb
-
+        # TODO
         # Network description
-        self.B = B
-        self.edges = None
-
-        # Embdedding dimension     
-        self.n = n
+        self.hparams['edges'] = None
 
     def on_train_epoch_end(self):
         dataloader = self.trainer.datamodule.train_dataloader()
@@ -37,59 +30,83 @@ class NetworkAgent(L.LightningModule):
 
         with torch.no_grad():
             # Reset local aggregators of cross-covariance
-            for agent in self.agents():
+            for agent in self.hparams.agents:
                 agent.reset_epoch_statistics()
-            
+
             # Compute and aggregate embeddings
-            for batch in dataloader: 
+            for batch in dataloader:
                 batch = self._move_batch_to_device(batch)
 
-                output = self.forward(batch)
+                output = self(batch)
 
-                for (i,j) in self.edges:
-                    agents[i].accumulate_statistics(output[i][0], output[j][0], agents[j].R)
-                    agents[j].accumulate_statistics(output[j][0], output[i][0], agents[i].R)
-            
+                for i, j in self.hparams.edges:
+                    self.hparams.agents[i].accumulate_statistics(
+                        output[i][0], output[j][0], self.hparams.agents[j].R
+                    )
+                    self.hparams.agents[j].accumulate_statistics(
+                        output[j][0], output[i][0], self.hparams.agents[i].R
+                    )
+
             # Perform reference alignment
-            for agent in agents:
+            for agent in self.hparams.agents:
                 agent.update_reference_frame()
-        
+
         self.train()
-        
+
         return None
 
     def forward(self, batch):
         output = {}
         xA, xP, xN, _ = batch
-        for agent in self.agents:
-            xA_ = xA[:, agent.idx * self.n : (agent.idx + 1) * self.n]
-            xP_ = xP[:, agent.idx * self.n : (agent.idx + 1) * self.n]
-            xN_ = xN[:, agent.idx * self.n : (agent.idx + 1) * self.n]
+        for agent in self.hparams.agents:
+            xA_ = xA[
+                :,
+                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
+            ]
+            xP_ = xP[
+                :,
+                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
+            ]
+            xN_ = xN[
+                :,
+                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
+            ]
 
             output[agent.idx] = agent(xA_, xP_, xN_)
 
         return output
 
     def training_step(self, batch, batch_idx):
-        R = torch.zeros_like(self.L)
+        R = torch.zeros_like(self.hparams.L)
         loss = 0
         output = self(batch)
-        E = torch.cat([output[agent.idx] for agent in self.agents], dim = 0)
+        E = torch.cat(
+            [output[agent.idx] for agent in self.hparams.agents], dim=0
+        )
 
         _, _, _, P = batch
 
-        for agent in self.agents:
+        for agent in self.hparams.agents:
             loss += agent.compute_loss(output[agent.idx])
-            R[agent.idx * self.n : ( agent.idx + 1 ) * self.n, agent.idx * self.n : ( agent.idx + 1 ) * self.n] = agent.R
-        
+            R[
+                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
+                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
+            ] = agent.R
+
         REP = R @ E @ P
 
-        for i in range(self.n):
-            loss += self.lmb * torch.linalg.norm(B.T @ REP[i::self.n,:]) ** 2
+        for i in range(self.hparams.n):
+            loss += (
+                self.hparams.lmb
+                * torch.linalg.norm(
+                    self.hparams.B.T @ REP[i :: self.hparams.n, :]
+                )
+                ** 2
+            )
 
         # TODO Train-loss logging
         return loss
-        
+
     def validation_step(self, batch, batch_idx):
         pass
 
@@ -100,4 +117,4 @@ class NetworkAgent(L.LightningModule):
         pass
 
     def configure_optimizers(self):
-        return torch.optimizer.AdamW(self.parameters(), lr = self.LR)
+        return torch.optimizer.AdamW(self.parameters(), lr=self.hparams.LR)
