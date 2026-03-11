@@ -90,11 +90,12 @@ class NetworkAgent(L.LightningModule):
                 The step type for logging purposes.
 
         Returns:
-            (y_hat, loss) : tuple[torch.Tensor, torch.Tensor]
+            (output, total_loss) : tuple[dict[int, torch.Tensor], torch.Tensor]
                 The tuple with the output of the network and the epoch loss.
         """
         R = torch.zeros_like(self.hparams.L)
-        loss = 0
+        main_loss = 0
+        reg_loss = 0
         output = self(batch)
         E = torch.cat(
             [output[agent.idx] for agent in self.hparams.agents], dim=0
@@ -103,7 +104,7 @@ class NetworkAgent(L.LightningModule):
         _, _, _, P = batch
 
         for agent in self.hparams.agents:
-            loss += agent.compute_loss(output[agent.idx])
+            main_loss += agent.compute_loss(output[agent.idx])
             R[
                 agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
                 agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
@@ -112,7 +113,7 @@ class NetworkAgent(L.LightningModule):
         REP = R @ E @ P
 
         for i in range(self.hparams.n):
-            loss += (
+            reg_loss += (
                 self.hparams.lmb
                 * torch.linalg.norm(
                     self.hparams.B.T @ REP[i :: self.hparams.n, :]
@@ -120,9 +121,25 @@ class NetworkAgent(L.LightningModule):
                 ** 2
             )
 
-        self.log(f'{prefix}/loss_epoch', loss, on_step=False, on_epoch=True)
+        total_loss = main_loss + reg_loss
 
-        return output, loss
+        self.log(
+            f'{prefix}/main_loss_epoch',
+            main_loss,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            f'{prefix}/reg_loss_epoch', reg_loss, on_step=False, on_epoch=True
+        )
+        self.log(
+            f'{prefix}/total_loss_epoch',
+            total_loss,
+            on_step=False,
+            on_epoch=True,
+        )
+
+        return output, total_loss
 
     def training_step(
         self,
