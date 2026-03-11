@@ -71,22 +71,27 @@ class NetworkOT(L.LightningModule):
             main_loss += agent.compute_loss(output[agent.idx])
 
         for i, j in self.hparams.edges:
-            reg_loss += (
-                torch.linalg.norm(
-                    P
-                    @ (
-                        self.hparams.agents[i].M @ output[i][0].T
-                        + self.hparams.agents[i].b
-                    )
-                    / self.hparams.agents[i].a
-                    - (
-                        self.hparams.agents[j].M @ output[j][0].T
-                        + self.hparams.agents[j].b
-                    )
-                    / self.hparams.agents[j].a
-                )
-                ** 2
-            )
+            xi = (
+                self.hparams.agents[i].M @ output[i][0].T
+                + self.hparams.agents[i].b
+            ) / self.hparams.agents[i].a
+            xj = (
+                self.hparams.agents[j].M @ output[j][0].T
+                + self.hparams.agents[j].b
+            ) / self.hparams.agents[j].a
+
+            xi = xi.T
+            xj = xj.T
+
+            mask_i = output[i][0][:, 0] != 0
+            mask_j = output[j][0][:, 0] != 0
+            mask = mask_i & mask_j
+
+            diff = xi - xj
+            sq = torch.sum(diff**2, dim=1)
+
+            reg_loss += torch.sum(sq * mask)
+
         total_loss = main_loss + self.hparams.lmb * reg_loss
 
         self.log(
