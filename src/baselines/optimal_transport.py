@@ -65,8 +65,6 @@ class NetworkOT(L.LightningModule):
         reg_loss = 0
         output = self(batch)
 
-        _, _, _, P = batch
-
         for agent in self.hparams.agents:
             main_loss += agent.compute_loss(output[agent.idx])
 

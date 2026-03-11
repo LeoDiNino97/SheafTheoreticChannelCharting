@@ -101,8 +101,6 @@ class NetworkAgent(L.LightningModule):
             [output[agent.idx] for agent in self.hparams.agents], dim=0
         )
 
-        _, _, _, P = batch
-
         for agent in self.hparams.agents:
             main_loss += agent.compute_loss(output[agent.idx])
             R[
@@ -110,14 +108,31 @@ class NetworkAgent(L.LightningModule):
                 agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
             ] = agent.R
 
-        REP = R @ E @ P
+        REP = R @ E
+
+        # Node mask
+        B = len(self.hparams.agents)
+        T = E.shape[1]
+
+        node_vals = E.view(B, self.hparams.n, T)
+        node_mask = node_vals.abs().sum(dim=1) != 0
+
+        # Edge mask
+        # Need it to zero-out edges where at least one
+        # Base-station does not observe the trajectory
+
+        edge_i = torch.tensor(
+            [e[0] for e in self.hparams.edges], device=E.device
+        )
+        edge_j = torch.tensor(
+            [e[1] for e in self.hparams.edges], device=E.device
+        )
+
+        edge_mask = (node_mask[edge_i] & node_mask[edge_j]).float()
 
         for i in range(self.hparams.n):
-            reg_loss += (
-                self.hparams.lmb
-                * torch.linalg.norm(
-                    self.hparams.B.T @ REP[i :: self.hparams.n, :]
-                )
+            reg_loss += self.hparams.lmb * torch.sum(
+                (edge_mask * self.hparams.B.T @ REP[i :: self.hparams.n, :])
                 ** 2
             )
 
