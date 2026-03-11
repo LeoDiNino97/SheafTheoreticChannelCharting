@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class BaseAgent(nn.Module, ABC):
+class ReferenceFrameAgent(nn.Module, ABC):
     """
     Abstract base class for all agents in the multi-agent training framework.
 
@@ -27,7 +27,11 @@ class BaseAgent(nn.Module, ABC):
         Unique identifier of the agent instance.
     """
 
-    def __init__(self, idx: int, n: int):
+    def __init__(
+        self,
+        idx: int,
+        n: int,
+    ) -> None:
         """
         Initialize the base agent.
 
@@ -35,16 +39,15 @@ class BaseAgent(nn.Module, ABC):
         ----------
         idx : int
             Unique identifier assigned to the agent.
+        n : int
+            Embedding dimension
         """
         super().__init__()
 
-        self.idx = idx
-
-        # Embedding dimension
-        self.n = n
+        self.save_hyperparameters()
 
         # Keep the reference frame in the buffer for proper gradient flowing
-        self.register_buffer('reference_frame', torch.eye(self.n))
+        self.register_buffer('reference_frame', torch.eye(self.hparams['n']))
 
     @abstractmethod
     def forward(
@@ -99,7 +102,8 @@ class BaseAgent(nn.Module, ABC):
 
     def reset_epoch_statistics(self):
         self.cov = torch.zeros(
-            (self.n, self.n), device=self.reference_frame.device
+            (self.hparams['n'], self.hparams['n']),
+            device=self.reference_frame.device,
         )
 
     def accumulate_statistics(self, E, E_tilde, R_tilde):
