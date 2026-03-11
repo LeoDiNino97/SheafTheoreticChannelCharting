@@ -23,38 +23,6 @@ class NetworkOT(L.LightningModule):
         # Network description
         self.hparams['edges'] = None
 
-    def on_train_epoch_end(self):
-        dataloader = self.trainer.datamodule.train_dataloader()
-
-        self.eval()
-
-        with torch.no_grad():
-            # Reset local aggregators of cross-covariance
-            for agent in self.hparams.agents:
-                agent.reset_epoch_statistics()
-
-            # Compute and aggregate embeddings
-            for batch in dataloader:
-                batch = self._move_batch_to_device(batch)
-
-                output = self(batch)
-
-                for i, j in self.hparams.edges:
-                    self.hparams.agents[i].accumulate_statistics(
-                        output[i][0], output[j][0], self.hparams.agents[j].R
-                    )
-                    self.hparams.agents[j].accumulate_statistics(
-                        output[j][0], output[i][0], self.hparams.agents[i].R
-                    )
-
-            # Perform reference alignment
-            for agent in self.hparams.agents:
-                agent.update_reference_frame()
-
-        self.train()
-
-        return None
-
     def forward(self, batch):
         output = {}
         xA, xP, xN, _ = batch
@@ -79,7 +47,7 @@ class NetworkOT(L.LightningModule):
     def _shared_eval(
         self, batch: list[torch.Tensor], batch_idx: int, prefix: str
     ):
-        """A common step performend in the test and validation step.
+        """A common step performed in the test and validation step.
 
         Args:
             batch : list[torch.Tensor]
@@ -90,39 +58,54 @@ class NetworkOT(L.LightningModule):
                 The step type for logging purposes.
 
         Returns:
-            (y_hat, loss) : tuple[torch.Tensor, torch.Tensor]
+            (output, total_loss) : tuple[dict[int, torch.Tensor], torch.Tensor]
                 The tuple with the output of the network and the epoch loss.
         """
-        R = torch.zeros_like(self.hparams.L)
-        loss = 0
+        main_loss = 0
+        reg_loss = 0
         output = self(batch)
-        E = torch.cat(
-            [output[agent.idx] for agent in self.hparams.agents], dim=0
-        )
 
         _, _, _, P = batch
 
         for agent in self.hparams.agents:
-            loss += agent.compute_loss(output[agent.idx])
-            R[
-                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
-                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
-            ] = agent.R
+            main_loss += agent.compute_loss(output[agent.idx])
 
-        REP = R @ E @ P
-
-        for i in range(self.hparams.n):
-            loss += (
-                self.hparams.lmb
-                * torch.linalg.norm(
-                    self.hparams.B.T @ REP[i :: self.hparams.n, :]
+        for i, j in self.hparams.edges:
+            reg_loss += (
+                torch.linalg.norm(
+                    P
+                    @ (
+                        self.hparams.agents[i].M @ output[i][0].T
+                        + self.hparams.agents[i].b
+                    )
+                    / self.hparams.agents[i].a
+                    - (
+                        self.hparams.agents[j].M @ output[j][0].T
+                        + self.hparams.agents[j].b
+                    )
+                    / self.hparams.agents[j].a
                 )
                 ** 2
             )
+        total_loss = main_loss + self.hparams.lmb * reg_loss
 
-        self.log(f'{prefix}/loss_epoch', loss, on_step=False, on_epoch=True)
+        self.log(
+            f'{prefix}/main_loss_epoch',
+            main_loss,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            f'{prefix}/reg_loss_epoch', reg_loss, on_step=False, on_epoch=True
+        )
+        self.log(
+            f'{prefix}/total_loss_epoch',
+            total_loss,
+            on_step=False,
+            on_epoch=True,
+        )
 
-        return output, loss
+        return output, total_loss
 
     def training_step(
         self,
