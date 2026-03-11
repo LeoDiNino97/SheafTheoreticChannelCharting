@@ -76,7 +76,23 @@ class NetworkAgent(L.LightningModule):
 
         return output
 
-    def training_step(self, batch, batch_idx):
+    def _shared_eval(
+        self, batch: list[torch.Tensor], batch_idx: int, prefix: str
+    ):
+        """A common step performend in the test and validation step.
+
+        Args:
+            batch : list[torch.Tensor]
+                The current batch.
+            batch_idx : int
+                The batch index.
+            prefix : str
+                The step type for logging purposes.
+
+        Returns:
+            (y_hat, loss) : tuple[torch.Tensor, torch.Tensor]
+                The tuple with the output of the network and the epoch loss.
+        """
         R = torch.zeros_like(self.hparams.L)
         loss = 0
         output = self(batch)
@@ -104,17 +120,112 @@ class NetworkAgent(L.LightningModule):
                 ** 2
             )
 
-        # TODO Train-loss logging
+        self.log(f'{prefix}/loss_epoch', loss, on_step=False, on_epoch=True)
+
+        return output, loss
+
+    def training_step(
+        self,
+        batch: list[torch.Tensor],
+        batch_idx: int,
+    ) -> torch.Tensor:
+        """The training step.
+
+        Args:
+            batch : list[torch.Tensor]
+                The current batch.
+            batch_idx : int
+                The batch index.
+
+        Returns:
+            loss : torch.Tensor
+                The epoch loss.
+        """
+        _, loss = self._shared_eval(
+            batch=batch,
+            batch_idx=batch_idx,
+            prefix='train',
+        )
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        pass
+    def test_step(
+        self,
+        batch: list[torch.Tensor],
+        batch_idx: int,
+    ) -> None:
+        """The test step.
 
-    def test_step(self, batch, batch_idx):
-        pass
+        Args:
+            batch : list[torch.Tensor]
+                The current batch.
+            batch_idx : int
+                The batch index.
 
-    def _shared_eval(self, batch, batch_idx, prefix):
-        pass
+        Returns:
+            None
+        """
+        _ = self._shared_eval(
+            batch=batch,
+            batch_idx=batch_idx,
+            prefix='test',
+        )
+        return None
 
-    def configure_optimizers(self):
-        return torch.optimizer.AdamW(self.parameters(), lr=self.hparams.LR)
+    def validation_step(
+        self,
+        batch: list[torch.Tensor],
+        batch_idx: int,
+    ) -> dict[int, torch.Tensor]:
+        """The validation step.
+
+        Args:
+            batch : list[torch.Tensor]
+                The current batch.
+            batch_idx : int
+                The batch index.
+
+        Returns:
+            output : dict[int, torch.Tensor]
+                The output of the network.
+        """
+        output, _ = self._shared_eval(
+            batch=batch,
+            batch_idx=batch_idx,
+            prefix='validation',
+        )
+        return output
+
+    def predict_step(
+        self,
+        batch: list[torch.Tensor],
+        batch_idx: int,
+    ) -> dict[int, torch.Tensor]:
+        """The predict step.
+
+        Args:
+            batch : list[torch.Tensor]
+                The current batch.
+            batch_idx : int
+                The batch index.
+            dataloader_idx : int
+                The dataloader idx.
+
+        Returns:
+            dict[int, torch.Tensor]
+                The output of the network.
+        """
+        return self(batch)
+
+    def configure_optimizers(self) -> dict[str, object]:
+        """Define the optimizer: Stochastic Gradient Descent.
+
+        Returns:
+            dict[str, object]
+                The optimizer and scheduler.
+        """
+        optimizer = torch.optimizer.AdamW(
+            self.parameters(), lr=self.hparams.LR
+        )
+        return {
+            'optimizer': optimizer,
+        }
