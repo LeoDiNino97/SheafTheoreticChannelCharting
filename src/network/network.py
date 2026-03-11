@@ -217,11 +217,16 @@ class NetworkAgent(L.LightningModule):
         return self(batch)
 
     def configure_optimizers(self) -> dict[str, object]:
-        """Define the optimizer: Stochastic Gradient Descent.
+        """Configure the optimizer used for training.
+
+        Uses the AdamW optimizer with the learning rate defined in
+        ``self.hparams.LR``.
 
         Returns:
-            dict[str, object]
-                The optimizer and scheduler.
+            dict[str, object]: A dictionary containing the optimizer used by
+            the training loop. The dictionary has the following key:
+
+            - "optimizer": The instantiated AdamW optimizer.
         """
         optimizer = torch.optimizer.AdamW(
             self.parameters(), lr=self.hparams.LR
