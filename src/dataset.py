@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 
 def csi_to_realvec(
     H: torch.Tensor,
+    c: float = 1e7,
 ) -> torch.Tensor:
     """
     Convert a complex CSI tensor into a real-valued vector.
@@ -22,7 +23,9 @@ def csi_to_realvec(
         except the first (sample) dimension.
     """
     # Flatten complex tensor into real vector (real + imag)
-    return torch.view_as_real(H).reshape(-1).float()
+    H = H * torch.tensor(c)
+    x = torch.view_as_real(H).reshape(-1).float()
+    return x
 
 
 class TrajectoryCSIDataset(Dataset):
@@ -37,8 +40,7 @@ class TrajectoryCSIDataset(Dataset):
     Positives:
         Same user, |dt| <= window, excluding anchor.
     Negatives:
-        Different user always, optionally same user outside window if
-        include_same_user_outside_window=True.
+        Same user outside window if
 
     Parameters
     ----------
@@ -58,9 +60,6 @@ class TrajectoryCSIDataset(Dataset):
         'triplet' or 'contrastive' (default: 'triplet').
     window : int, optional
         Time window for positive sampling (default: 3).
-    include_same_user_outside_window : bool, optional
-        Include same-user points outside window as negatives
-        (default: False).
     p_positive : float, optional
         Probability of positive pair in contrastive mode (default: 0.5).
     seed : int, optional
@@ -77,21 +76,26 @@ class TrajectoryCSIDataset(Dataset):
         self,
         rx_pos: np.ndarray,
         H_users: np.ndarray,
-        num_users: int = 500,
+        bs_pos: np.ndarray,
+        num_users: int = 1,
         T_min: int = 32,
         T_max: int = 128,
-        kinds=('linear', 'circular', 'random'),
+        trajectory_kind: str | None = None,
         linear_len=(20.0, 120.0),
         circle_r=(10.0, 60.0),
         random_step=(1.0, 5.0),
         random_keep_dir=0.7,
-        z_min=None,
-        z_max=None,
+        z_min: float | None = None,
+        z_max: float | None = None,
+        r_min: float | None = None,
+        r_max: float | None = None,
+        coverage_area: float = 0.2,
+        bias_sampling: bool = False,
         seed: int = 0,
         # --- Siamese sampling controls ---
         pair_mode: str = 'triplet',  # "triplet" or "contrastive"
-        window: int = 3,
-        include_same_user_outside_window: bool = False,  # for negatives
+        in_window: int = 3,
+        out_window: int = 6,
         p_positive: float = 0.5,  # only for contrastive
     ):
         super().__init__()
@@ -99,11 +103,13 @@ class TrajectoryCSIDataset(Dataset):
         # Siamese sampling configuration
         assert pair_mode in ('triplet', 'contrastive')
         self.pair_mode = pair_mode
-        self.window = int(window)
-        self.include_same_user_outside_window = bool(
-            include_same_user_outside_window
+        self.in_window = int(in_window)
+        self.out_window = int(out_window)
+        assert out_window > in_window, (
+            '"out_window" must always be grater than "in_window"'
         )
         self.p_positive = float(p_positive)
+        self.bias_sampling = bool(bias_sampling)
 
         self.rng = np.random.default_rng(seed)
 
@@ -126,6 +132,26 @@ class TrajectoryCSIDataset(Dataset):
         if z_max is not None:
             mask &= rx_pos[:, 2] <= float(z_max)
 
+        # distance-to-BS filtering
+        bs_pos = np.asarray(bs_pos)
+        if bs_pos.shape[0] == 2:
+            bs_pos = np.r_[bs_pos, 0.0]
+
+        d = np.linalg.norm(rx_pos - bs_pos, axis=1)
+
+        if r_min is not None:
+            mask &= d >= float(r_min)
+
+        assert coverage_area >= 0 and coverage_area <= 1, (
+            '"coverage_area" must be between 0 and 1 for a BS.'
+        )
+        if r_max is None:
+            xmin, ymin = rx_pos[:, :2].min(axis=0)
+            xmax, ymax = rx_pos[:, :2].max(axis=0)
+            r_max = coverage_area * min(xmax - xmin, ymax - ymin)
+
+        mask &= d <= float(r_max)
+
         self.valid_idxs = np.where(mask)[0]
         if len(self.valid_idxs) < 10:
             raise ValueError('Too few valid RX points after filtering.')
@@ -138,7 +164,14 @@ class TrajectoryCSIDataset(Dataset):
         self.T_max = int(T_max)
         if self.T_min < 2 or self.T_max < self.T_min:
             raise ValueError('Bad T_min/T_max')
-        self.kinds = tuple(kinds)
+        self.kinds = ('linear', 'circular', 'random')
+        self.trajectory_kind = trajectory_kind
+        assert (self.trajectory_kind in self.kinds) or (
+            self.trajectory_kind is None
+        ), (
+            f'Trajectory kind "{self.trajectory_kind}" not available,'
+            + 'possible values: ["linear", "circular", "random", None]'
+        )
 
         self.linear_len = linear_len
         self.circle_r = circle_r
@@ -146,37 +179,55 @@ class TrajectoryCSIDataset(Dataset):
         self.random_keep_dir = float(random_keep_dir)
 
         # ---- Build variable-length trajectories once ----
-        self._user_of_index = []
-        self._t_of_index = []
-        self._rx_of_index = []
+        self.idx_to_neg_pos = {}
 
         for user_id in range(self.num_users):
             # Random trajectory length
             T = int(self.rng.integers(self.T_min, self.T_max + 1))
 
             # Randomly pick trajectory kind
-            kind = self.kinds[int(self.rng.integers(0, len(self.kinds)))]
+            kind = (
+                self.kinds[int(self.rng.integers(0, len(self.kinds)))]
+                if self.trajectory_kind is None
+                else self.trajectory_kind
+            )
 
             # Generate trajectory of RX indices
             rx_idxs = self._generate_one(kind, T)
-
-            # Store per-step info for sampling
-            for t, rx in enumerate(rx_idxs):
-                self._user_of_index.append(user_id)
-                self._t_of_index.append(t)
-                self._rx_of_index.append(int(rx))
-
-        # Convert to arrays for fast indexing
-        self._user_of_index = np.asarray(self._user_of_index, dtype=np.int64)
-        self._t_of_index = np.asarray(self._t_of_index, dtype=np.int64)
-        self._rx_of_index = np.asarray(self._rx_of_index, dtype=np.int64)
-
-        # Map user -> global indices (contiguous, but keep general)
-        self.user_to_indices = {}
-        for uid in range(self.num_users):
-            self.user_to_indices[uid] = np.where(self._user_of_index == uid)[
-                0
-            ].astype(np.int64)
+            max_idx = np.max(rx_idxs)
+            min_idx = np.min(rx_idxs)
+            for idx in rx_idxs:
+                min_point = min_idx + self.out_window
+                max_point = max_idx - self.out_window
+                if idx > min_point and idx < max_point:
+                    pos = np.clip(
+                        np.arange(
+                            idx - self.in_window, idx + self.in_window + 1
+                        ),
+                        a_min=0,
+                        a_max=max_idx,
+                    )
+                    pos = pos[pos != idx]
+                    neg = np.clip(
+                        np.concat(
+                            [
+                                np.arange(
+                                    idx - self.out_window, idx - self.in_window
+                                ),
+                                np.arange(
+                                    idx + self.in_window + 1,
+                                    idx + self.out_window + 1,
+                                ),
+                            ]
+                        ),
+                        a_min=0,
+                        a_max=max_idx,
+                    )
+                    neg = neg[neg != idx]
+                    self.idx_to_neg_pos[(user_id, idx)] = {
+                        'pos': pos,
+                        'neg': neg,
+                    }
 
     # ----------------- Snapping helpers -----------------
     def _snap(
@@ -209,11 +260,19 @@ class TrajectoryCSIDataset(Dataset):
         np.ndarray
             Selected XY coordinate (2,).
         """
-        return self.rx_xy[int(self.rng.integers(0, len(self.rx_xy)))].copy()
+        if self.bias_sampling:
+            power = np.linalg.norm(
+                self.H_users.reshape(len(self.H_users), -1), axis=1
+            )
+            prob = power / power.sum()
+            idx = self.rng.choice(len(self.rx_xy), p=prob)
+        else:
+            idx = int(self.rng.integers(0, len(self.rx_xy)))
+        return self.rx_xy[idx].copy()
 
     def _generate_one(
         self,
-        kind: str,
+        kind: str | None,
         T: int,
     ) -> np.ndarray:
         """
@@ -238,7 +297,6 @@ class TrajectoryCSIDataset(Dataset):
             end = start + L * np.array([np.cos(ang), np.sin(ang)])
             s = np.linspace(0.0, 1.0, T)
             xy = start * (1 - s)[:, None] + end * s[:, None]
-            return self._snap(xy)
 
         if kind == 'circular':
             center = self._rand_anchor_xy()
@@ -249,7 +307,6 @@ class TrajectoryCSIDataset(Dataset):
                 [center[0] + r * np.cos(ang), center[1] + r * np.sin(ang)],
                 axis=1,
             )
-            return self._snap(xy)
 
         if kind == 'random':
             xy = np.empty((T, 2), dtype=np.float64)
@@ -270,84 +327,13 @@ class TrajectoryCSIDataset(Dataset):
                 d = np.array([np.cos(ang), np.sin(ang)])
                 xy[t] = xy[t - 1] + step * d
                 prev_dir = d
-            return self._snap(xy)
-
-        raise ValueError(f'Unknown kind: {kind}')
-
-    # ----------------- mining -----------------
-    def get_positive_examples(
-        self,
-        anchor_idx: int,
-        window: int,
-    ) -> np.ndarray:
-        """
-        Return indices of positive samples for the given anchor.
-
-        Positives are from the same user and within +/- window steps
-        around the anchor, excluding the anchor itself.
-
-        Parameters
-        ----------
-        anchor_idx : int
-            Index of the anchor sample.
-        window : int
-            Time window for selecting positives.
-
-        Returns
-        -------
-        np.ndarray
-            Indices of positive samples.
-        """
-        uid = int(self._user_of_index[anchor_idx])
-        t0 = int(self._t_of_index[anchor_idx])
-        user_indices = self.user_to_indices[uid]
-        user_ts = self._t_of_index[user_indices]
-        m = (user_ts >= t0 - window) & (user_ts <= t0 + window)
-        pos = user_indices[m]
-        return pos[pos != anchor_idx]
-
-    def get_negative_examples(
-        self,
-        anchor_idx: int,
-        window: int,
-        include_same_user_outside_window: bool = True,
-    ) -> np.ndarray:
-        """
-        Return indices of negative samples for the given anchor.
-
-        Negatives include all samples from different users. Optionally,
-        same-user samples outside the window can also be included.
-
-        Parameters
-        ----------
-        anchor_idx : int
-            Index of the anchor sample.
-        window : int
-            Time window for positive samples (used to exclude near positives).
-        include_same_user_outside_window : bool
-            Whether to include same-user samples outside the window.
-
-        Returns
-        -------
-        np.ndarray
-            Indices of negative samples.
-        """
-        uid = int(self._user_of_index[anchor_idx])
-        t0 = int(self._t_of_index[anchor_idx])
-
-        # different user always negative
-        neg = np.where(self._user_of_index != uid)[0].astype(np.int64)
-
-        if include_same_user_outside_window:
-            user_indices = self.user_to_indices[uid]
-            user_ts = self._t_of_index[user_indices]
-            m_out = (user_ts < t0 - window) | (user_ts > t0 + window)
-            neg = np.concatenate([neg, user_indices[m_out]], axis=0)
-
-        return neg
+        return self._snap(xy)
 
     # ----------------- CSI helpers -----------------
-    def _H_from_global_index(self, gidx: int) -> torch.Tensor:
+    def _H_from_global_index(
+        self,
+        gidx: int,
+    ) -> torch.Tensor:
         """
         Return the CSI tensor for the given global index.
 
@@ -361,8 +347,7 @@ class TrajectoryCSIDataset(Dataset):
         torch.Tensor
             Complex CSI tensor for the corresponding RX location.
         """
-        rx_idx = int(self._rx_of_index[gidx])
-        return torch.from_numpy(self.H_users[rx_idx])  # complex tensor
+        return torch.from_numpy(self.H_users[gidx])  # complex tensor
 
     def _pick_one(self, idxs: np.ndarray) -> int:
         """
@@ -392,7 +377,7 @@ class TrajectoryCSIDataset(Dataset):
         int
             Total number of trajectory points across all users.
         """
-        return int(self._user_of_index.shape[0])
+        return len(self.idx_to_neg_pos)
 
     def __getitem__(
         self,
@@ -409,28 +394,28 @@ class TrajectoryCSIDataset(Dataset):
         # Anchor
         H_A = self._H_from_global_index(index)
 
-        pos = self.get_positive_examples(index, self.window)
-        neg = self.get_negative_examples(
-            index, self.window, self.include_same_user_outside_window
-        )
+        id = list(self.idx_to_neg_pos.keys())[index]
 
-        p_idx = self._pick_one(pos)
-        if p_idx < 0:
-            p_idx = index  # degenerate fallback
+        pos_idxs = self.idx_to_neg_pos[id]['pos']
+        neg_idxs = self.idx_to_neg_pos[id]['neg']
 
         match self.pair_mode:
             case 'triplet':
                 # Triplet
-                n_idx = self._pick_one(neg)
-                if n_idx < 0:
-                    n_idx = index
-
-                H_P = self._H_from_global_index(p_idx)
-                H_N = self._H_from_global_index(n_idx)
 
                 xA = csi_to_realvec(H_A)
-                xP = csi_to_realvec(H_P)
-                xN = csi_to_realvec(H_N)
+                xP = torch.vstack(
+                    [
+                        csi_to_realvec(self._H_from_global_index(i))
+                        for i in pos_idxs
+                    ]
+                )
+                xN = torch.vstack(
+                    [
+                        csi_to_realvec(self._H_from_global_index(i))
+                        for i in neg_idxs
+                    ]
+                )
 
                 y = torch.tensor(-1, dtype=torch.long)  # <-- IMPORTANT
 
@@ -438,19 +423,34 @@ class TrajectoryCSIDataset(Dataset):
                 # Contrastive:
                 # sample positive pair with prob p_positive else negative pair
                 if self.rng.random() < self.p_positive:
-                    H_P = self._H_from_global_index(p_idx)
                     xA = csi_to_realvec(H_A)
-                    xP = csi_to_realvec(H_P)
-                    xN = None
+                    xP = torch.vstack(
+                        [
+                            csi_to_realvec(self._H_from_global_index(i))
+                            for i in pos_idxs
+                        ]
+                    )
+                    xN = torch.vstack(
+                        [
+                            csi_to_realvec(self._H_from_global_index(i))
+                            for i in neg_idxs
+                        ]
+                    )
                     y = torch.tensor(1, dtype=torch.long)
                 else:
-                    n_idx = self._pick_one(neg)
-                    if n_idx < 0:
-                        n_idx = index
-                    H_N = self._H_from_global_index(n_idx)
                     xA = csi_to_realvec(H_A)
-                    xP = csi_to_realvec(H_N)  # second element of pair
-                    xN = None
+                    xP = torch.vstack(
+                        [
+                            csi_to_realvec(self._H_from_global_index(i))
+                            for i in pos_idxs
+                        ]
+                    )
+                    xN = torch.vstack(
+                        [
+                            csi_to_realvec(self._H_from_global_index(i))
+                            for i in neg_idxs
+                        ]
+                    )
                     y = torch.tensor(0, dtype=torch.long)
 
         return xA, xP, xN, y

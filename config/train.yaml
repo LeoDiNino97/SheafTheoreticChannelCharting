@@ -7,4 +7,4 @@ logger:
   save_dir: checkpoints
   project: sheaf_cc
 
-seed: 1218
+seed: 80

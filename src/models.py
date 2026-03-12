@@ -262,12 +262,16 @@ class SiameseNN(L.LightningModule):
 
             # Encoder compresses input to 2D embedding
             self.encoder = Encoder(
-                in_dim=in_dim, out_dim=2, num_hidden_layers=num_hidden_layers
+                in_dim=in_dim,
+                out_dim=out_dim,
+                num_hidden_layers=num_hidden_layers,
             )
 
             # Decoder reconstructs the original feature space
             self.decoder = Decoder(
-                in_dim=2, out_dim=in_dim, num_hidden_layers=num_hidden_layers
+                in_dim=out_dim,
+                out_dim=in_dim,
+                num_hidden_layers=num_hidden_layers,
             )
 
             # Siamese loss layer

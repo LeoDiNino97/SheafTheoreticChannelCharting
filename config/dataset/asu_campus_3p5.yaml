@@ -9,5 +9,6 @@ pin_memory: true
 num_users: 100
 T_min: 20
 T_max: 60
+window: 500
 
 compute_channels:

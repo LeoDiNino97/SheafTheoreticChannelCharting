@@ -247,15 +247,12 @@ class CSIDataModule(L.LightningDataModule):
         self.train_dataset = TrajectoryCSIDataset(
             rx_pos=ds0.rx_pos,
             H_users=ds0.channels,
+            bs_pos=ds0.bs_pos,
             num_users=train_num_users,
             T_min=int(self.cfg['T_min']),
             T_max=int(self.cfg['T_max']),
             seed=int(self.cfg['train_seed']),
             pair_mode=str(self.cfg['pair_mode']),
-            window=int(self.cfg['window']),
-            include_same_user_outside_window=bool(
-                self.cfg['include_same_user_outside_window']
-            ),
             p_positive=float(self.cfg['p_positive']),
         )
 
@@ -263,15 +260,12 @@ class CSIDataModule(L.LightningDataModule):
         self.test_dataset = TrajectoryCSIDataset(
             rx_pos=ds0.rx_pos,
             H_users=ds0.channels,
+            bs_pos=ds0.bs_pos,
             num_users=test_num_users,
             T_min=int(self.cfg['T_min']),
             T_max=int(self.cfg['T_max']),
             seed=int(self.cfg['test_seed']),
             pair_mode=str(self.cfg['pair_mode']),
-            window=int(self.cfg['window']),
-            include_same_user_outside_window=bool(
-                self.cfg['include_same_user_outside_window']
-            ),
             p_positive=float(self.cfg['p_positive']),
         )
 
@@ -279,15 +273,12 @@ class CSIDataModule(L.LightningDataModule):
         self.val_dataset = TrajectoryCSIDataset(
             rx_pos=ds0.rx_pos,
             H_users=ds0.channels,
+            bs_pos=ds0.bs_pos,
             num_users=val_num_users,
             T_min=int(self.cfg['T_min']),
             T_max=int(self.cfg['T_max']),
             seed=int(self.cfg['val_seed']),
             pair_mode=str(self.cfg['pair_mode']),
-            window=int(self.cfg['window']),
-            include_same_user_outside_window=bool(
-                self.cfg['include_same_user_outside_window']
-            ),
             p_positive=float(self.cfg['p_positive']),
         )
 
