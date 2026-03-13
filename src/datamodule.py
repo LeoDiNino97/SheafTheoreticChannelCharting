@@ -18,6 +18,8 @@ from typing import Any
 import deepmimo as dm
 import lightning as L
 import numpy as np
+
+# from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
@@ -293,6 +295,13 @@ class CSIDataModule(L.LightningDataModule):
         DataLoader
             PyTorch DataLoader used during model training.
         """
+        # loaders = {
+        #     "model_a": DataLoader(ds_a, batch_size=32),
+        #     "model_b": DataLoader(ds_b, batch_size=32),
+        #     "shared_ab": DataLoader(ds_shared_ab, batch_size=32),
+        # }
+
+        # return CombinedLoader(loaders, mode="max_size_cycle")
         return DataLoader(
             self.train_dataset,
             batch_size=int(self.cfg['batch_size']),

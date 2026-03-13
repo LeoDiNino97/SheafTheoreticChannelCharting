@@ -55,34 +55,31 @@ class NetworkAgent(L.LightningModule):
 
         return None
 
-    def forward(self, batch):
+    def forward(
+        self,
+        batch: dict[str, list[torch.Tensor]],
+    ) -> dict[str, torch.Tensor]:
         output = {}
-        xA, xP, xN, _ = batch
-        for agent in self.hparams.agents:
-            xA_ = xA[
-                :,
-                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
-            ]
-            xP_ = xP[
-                :,
-                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
-            ]
-            xN_ = xN[
-                :,
-                agent.idx * self.hparams.n : (agent.idx + 1) * self.hparams.n,
-            ]
 
-            output[agent.idx] = agent(xA_, xP_, xN_)
+        for agent in self.hparams.agents:
+            agent_batch = batch[f'agent_{agent.idx}']
+
+            xA, xP, xN, _ = agent_batch
+
+            output[agent.idx] = agent(xA, xP, xN)
 
         return output
 
     def _shared_eval(
-        self, batch: list[torch.Tensor], batch_idx: int, prefix: str
+        self,
+        batch: dict[str, list[torch.Tensor]],
+        batch_idx: int,
+        prefix: str,
     ):
-        """A common step performend in the test and validation step.
+        """A common step performed in the test and validation step.
 
         Args:
-            batch : list[torch.Tensor]
+            batch : dict[str, list[torch.Tensor]]
                 The current batch.
             batch_idx : int
                 The batch index.
@@ -158,13 +155,13 @@ class NetworkAgent(L.LightningModule):
 
     def training_step(
         self,
-        batch: list[torch.Tensor],
+        batch: dict[str, list[torch.Tensor]],
         batch_idx: int,
     ) -> torch.Tensor:
         """The training step.
 
         Args:
-            batch : list[torch.Tensor]
+            batch : dict[str, list[torch.Tensor]]
                 The current batch.
             batch_idx : int
                 The batch index.
@@ -182,13 +179,13 @@ class NetworkAgent(L.LightningModule):
 
     def test_step(
         self,
-        batch: list[torch.Tensor],
+        batch: dict[str, list[torch.Tensor]],
         batch_idx: int,
     ) -> None:
         """The test step.
 
         Args:
-            batch : list[torch.Tensor]
+            batch : dict[str, list[torch.Tensor]]
                 The current batch.
             batch_idx : int
                 The batch index.
@@ -205,13 +202,13 @@ class NetworkAgent(L.LightningModule):
 
     def validation_step(
         self,
-        batch: list[torch.Tensor],
+        batch: dict[str, list[torch.Tensor]],
         batch_idx: int,
     ) -> dict[int, torch.Tensor]:
         """The validation step.
 
         Args:
-            batch : list[torch.Tensor]
+            batch : dict[str, list[torch.Tensor]]
                 The current batch.
             batch_idx : int
                 The batch index.
@@ -229,13 +226,13 @@ class NetworkAgent(L.LightningModule):
 
     def predict_step(
         self,
-        batch: list[torch.Tensor],
+        batch: dict[str, list[torch.Tensor]],
         batch_idx: int,
     ) -> dict[int, torch.Tensor]:
         """The predict step.
 
         Args:
-            batch : list[torch.Tensor]
+            batch : dict[str, list[torch.Tensor]]
                 The current batch.
             batch_idx : int
                 The batch index.
