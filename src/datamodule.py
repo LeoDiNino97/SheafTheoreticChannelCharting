@@ -146,6 +146,7 @@ class CSIDataModule(L.LightningDataModule):
         self.train_dataset = None
         self.test_dataset = None
         self.val_dataset = None
+        self.n_agents = None
 
         # Basic validation of split parameters
         assert 0 <= self.cfg['train_split'] <= 1, (
@@ -201,12 +202,44 @@ class CSIDataModule(L.LightningDataModule):
         # Load DeepMIMO scenario
         ds = dm.load(self.cfg['scenario'])
 
+        # Channel computation arguments
+        ch_kwargs = self.cfg.get('compute_channels') or {}
+
+        self.n_agents = len(ds) if isinstance(ds, (list, tuple)) else 1
+
+        self.rx_pos_all = (
+            ds[0].rx_pos if isinstance(ds, (list, tuple)) else ds.rx_pos
+        )
+        self.valid_rx_pos = {}
+        union_mask = np.zeros_like(self.rx_pos_all, dtype=bool)
+
+        for base_station in ds:
+            base_station.compute_channels(**ch_kwargs)
+            bs_pos = base_station.bs_pos
+
+            d = np.linalg.norm(self.rx_pos_all - bs_pos, axis=1)
+            if self.cfg.r_min is not None:
+                mask &= d >= float(self.cfg.r_min)
+
+            assert (
+                self.cfg.coverage_area >= 0 and self.cfg.coverage_area <= 1
+            ), '"coverage_area" must be between 0 and 1 for a BS.'
+            if self.cfg.r_max is None:
+                xmin, ymin = self.rx_pos_all[:, :2].min(axis=0)
+                xmax, ymax = self.rx_pos_all[:, :2].max(axis=0)
+                r_max = self.cfg.coverage_area * min(xmax - xmin, ymax - ymin)
+
+            mask &= d <= float(r_max)
+
+            self.bs_coords[base_station] = {
+                'rx_pos': self.rx_pos_all[np.where(mask)[0]],
+                'mask': mask,
+            }
+            union_mask |= mask
+
         # Some scenarios return a list of datasets
         # (e.g., multiple base stations)
         ds0 = ds[0] if isinstance(ds, (list, tuple)) else ds
-
-        # Channel computation arguments
-        ch_kwargs = self.cfg.get('compute_channels') or {}
 
         # Compute channel matrices
         try:

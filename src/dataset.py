@@ -454,3 +454,7 @@ class TrajectoryCSIDataset(Dataset):
                     y = torch.tensor(0, dtype=torch.long)
 
         return xA, xP, xN, y
+
+        # xA: [BS, d]
+        # xP: [BS, n_pos, d]
+        # xN: [BS, n_neg, d]
