@@ -1,0 +1,33 @@
+defaults:
+  - _self_
+  - dataset: dichasus_cf0x
+  - model: siameseNN
+  - orchestrator: cover_sheaf
+
+dataset:
+  batch_size: 8192
+  num_workers: 0
+
+logger:
+  _target_: lightning.pytorch.loggers.WandbLogger
+  project: sheaf_cc_daylight
+  name: ${hydra:runtime.choices.orchestrator}_${now:%Y-%m-%d}_${now:%H-%M-%S}
+  log_model: false
+
+seed: 80
+
+# Bootstrap evaluation: each fold uses a different triplet seed to produce
+# an independent evaluation sample. Mean and std are computed across folds.
+num_folds: 4
+anchor_seed: 80
+triplet_seeds: [10, 20, 30, 40]
+
+eval_K_max: 40
+eval_K_min: 2
+eval_K_step: 4
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      model.use_decoder: false

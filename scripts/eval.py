@@ -1,27 +1,24 @@
 """Evaluation script: load saved checkpoints and compute metrics for all orchestrators.
 
-Uses the same Hydra config as ``simulation.py``.  For each orchestrator type
-the script:
+Uses a dedicated ``eval.yaml`` Hydra config.  For each orchestrator type the
+script:
 
-1. Resolves the per-run results directory from the dataset config (same subdir
-   logic used for checkpoints: 2_agents, 4_agents, etc.).
-2. If ``results/{subdir}/{orch_name}/eval_metrics.parquet`` already exists,
-   the orchestrator is **skipped** and its cached metrics + latent
-   representations are reused.
-3. Otherwise, finds the checkpoint with the lowest encoded training loss,
-   loads the full orchestrator, evaluates it on the training dataset, and
-   saves both metrics and latent representations to the per-orchestrator dir.
-4. Collects KS, CT@K, TW@K, and FOSCTTM metrics for every agent.
+1. Finds the checkpoint with the lowest encoded training loss.
+2. Loads the full orchestrator once.
+3. Runs ``num_folds`` evaluation passes, each with a different ``triplet_seed``
+   drawn from ``cfg.triplet_seeds``.  Each pass produces one independent set
+   of topology metrics — effectively a bootstrap over data resampling.
+4. Computes mean and std of KS, CT@K, and TW@K across folds, both globally
+   (averaged over agents) and per agent.
 
 Per-orchestrator results are written to:
     ``results/{subdir}/{orch_name}/eval_metrics.parquet``
-    ``results/{subdir}/{orch_name}/local_agent_{i}.pt``
-    ``results/{subdir}/{orch_name}/shared_{i}_{j}.pt``
 
 An aggregated summary across all orchestrators is also written to:
     ``results/{subdir}/eval_metrics.parquet``
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -35,34 +32,39 @@ from omegaconf import DictConfig
 
 from scripts.util import (
     compute_eval_metrics,
-    compute_loss_metrics,
     find_best_checkpoint,
     get_checkpoint_dir,
     get_results_dir,
-    load_orch_metrics,
-    save_latent_representations,
     save_orch_metrics,
 )
 from src.datamodules.dichasus import DICHASUSDataModule
 
-# All orchestrator config names that may have a saved checkpoint
 ORCHESTRATOR_NAMES = [
-    # 'bundle',
-    # 'cover_sheaf',
-    # 'diag_sheaf',
-    # 'federated',
-    # 'flat_bundle',
-    # 'neural_diag_sheaf',
+    'bundle',
+    'cover_sheaf',
+    'diag_sheaf',
+    'federated',
+    'flat_bundle',
     'optimal_transport',
-    # 'personalized_federated',
-    # 'single_agent',
-    # 'vanilla',
+    'personalized_federated',
+    'vanilla',
 ]
+
+
+def _mean(vals: list[float]) -> float:
+    return sum(vals) / len(vals) if vals else float('nan')
+
+
+def _std(vals: list[float]) -> float:
+    if len(vals) < 2:
+        return float('nan')
+    m = _mean(vals)
+    return math.sqrt(sum((v - m) ** 2 for v in vals) / (len(vals) - 1))
 
 
 @hydra.main(
     config_path='../config/hydra/',
-    config_name='train',
+    config_name='eval',
     version_base='1.3',
 )
 def main(cfg: DictConfig) -> None:
@@ -70,11 +72,8 @@ def main(cfg: DictConfig) -> None:
 
     CURRENT = Path('.')
 
-    # ===================================================
-    #   Directories
-    # ===================================================
     ckpt_dir = get_checkpoint_dir(cfg, CURRENT)
-    results_subdir = get_results_dir(cfg, CURRENT)  # e.g. results/2_agents
+    results_subdir = get_results_dir(cfg, CURRENT)
     results_subdir.mkdir(exist_ok=True, parents=True)
 
     project_name = cfg.logger.project
@@ -83,38 +82,20 @@ def main(cfg: DictConfig) -> None:
     K_min: int = cfg.get('eval_K_min', 2)
     step: int = cfg.get('eval_K_step', 4)
 
-    # ===================================================
-    #   DataModule — initialised once, shared across all
-    #   orchestrators evaluated in this run
-    # ===================================================
-    datamodule = DICHASUSDataModule(
-        cfg.dataset,
-        anchor_seed=cfg.get('anchor_seed', cfg.seed),
-        triplet_seed=cfg.get('triplet_seeds', [cfg.seed])[0],
-    )
-    datamodule.prepare_data()
-    datamodule.setup('fit')
+    num_folds: int = cfg.get('num_folds', 1)
+    anchor_seed: int = cfg.get('anchor_seed', cfg.seed)
+    triplet_seeds: list[int] = list(cfg.get('triplet_seeds', list(range(num_folds))))
 
-    # ===================================================
-    #   Evaluate each orchestrator
-    # ===================================================
+    if num_folds > 1:
+        results_subdir = results_subdir / 'multifold'
+        results_subdir.mkdir(exist_ok=True, parents=True)
+
     records: list[dict] = []
 
     for orch_name in ORCHESTRATOR_NAMES:
         orch_dir = results_subdir / orch_name
 
-        # --------------------------------------------------
-        # Cache hit: reuse existing per-orchestrator results
-        # --------------------------------------------------
-        cached_row = load_orch_metrics(orch_dir)
-        if cached_row is not None:
-            print(f'\n[{orch_name}] Found existing results in {orch_dir} — skipping evaluation.')
-            records.append(cached_row)
-            continue
-
-        # --------------------------------------------------
-        # No cache: locate checkpoint
-        # --------------------------------------------------
+        # Locate checkpoint
         ckpt_path = find_best_checkpoint(ckpt_dir, project_name, orch_name)
         if ckpt_path is None:
             print(f'[{orch_name}] No checkpoint found in {ckpt_dir} — skipping.')
@@ -124,84 +105,103 @@ def main(cfg: DictConfig) -> None:
         orchestrator = torch.load(ckpt_path, map_location='cpu', weights_only=False)
         orchestrator.eval()
 
-        print(f'[{orch_name}] Computing losses on training data…')
-        try:
-            loss_metrics = compute_loss_metrics(orchestrator, datamodule)
-        except Exception as exc:
-            print(f'[{orch_name}] Loss computation failed: {exc} — skipping.')
-            continue
+        # -------------------------------------------------------
+        # Bootstrap evaluation: one pass per fold / triplet seed
+        # -------------------------------------------------------
+        # fold_metrics[fold_idx] = {'KS': [per-agent], 'CT': {K: [per-agent]}, 'TW': ...}
+        fold_metrics: list[dict] = []
 
-        print(f'[{orch_name}] Computing topology metrics…')
-        try:
-            metrics = compute_eval_metrics(
-                orchestrator,
-                datamodule,
-                K_max=K_max,
-                K_min=K_min,
-                step=step,
+        for fold_idx, triplet_seed in enumerate(triplet_seeds):
+            print(f'[{orch_name}] Fold {fold_idx + 1}/{num_folds}  (triplet_seed={triplet_seed})')
+
+            datamodule = DICHASUSDataModule(
+                cfg.dataset,
+                anchor_seed=anchor_seed,
+                triplet_seed=triplet_seed,
             )
-        except Exception as exc:
-            print(f'[{orch_name}] Metric computation failed: {exc} — skipping.')
+            datamodule.prepare_data()
+            datamodule.setup('fit')
+
+            try:
+                metrics = compute_eval_metrics(
+                    orchestrator,
+                    datamodule,
+                    K_max=K_max,
+                    K_min=K_min,
+                    step=step,
+                )
+            except Exception as exc:
+                print(f'[{orch_name}] Fold {fold_idx + 1} failed: {exc} — skipping fold.')
+                continue
+
+            fold_metrics.append(metrics)
+
+        if not fold_metrics:
+            print(f'[{orch_name}] All folds failed — skipping orchestrator.')
             continue
 
-        # --------------------------------------------------
-        # Flatten metrics into a single dict (one DataFrame row)
-        # --------------------------------------------------
+        n_folds = len(fold_metrics)
+
+        # -------------------------------------------------------
+        # Aggregate across folds: mean and std
+        # -------------------------------------------------------
         row: dict = {'orchestrator': orch_name}
 
-        # Loss metrics from training-data forward pass
-        # Includes: total_loss, total_private_loss, total_alignment_loss,
-        #           triplet_loss_agent_i, rec_loss_agent_i (when decoder is used)
-        row.update(loss_metrics)
+        # KS: per-agent mean/std across folds
+        n_agents = len(fold_metrics[0]['KS'])
+        for i in range(n_agents):
+            vals = [fold_metrics[f]['KS'][i] for f in range(n_folds)]
+            row[f'KS_agent_{i}'] = _mean(vals)
+            row[f'KS_agent_{i}_std'] = _std(vals)
 
-        # Per-agent Kruskal stress
-        for i, ks_val in enumerate(metrics['KS']):
-            row[f'KS_agent_{i}'] = float(ks_val)
-        row['KS_mean'] = float(sum(metrics['KS']) / len(metrics['KS'])) if metrics['KS'] else None
+        # KS global mean/std (average agents first, then fold stats)
+        fold_ks_means = [_mean(fold_metrics[f]['KS']) for f in range(n_folds)]
+        row['KS_mean'] = _mean(fold_ks_means)
+        row['KS_std'] = _std(fold_ks_means)
 
-        # Per-K continuity and trustworthiness (mean + per-agent values)
+        # CT and TW: per-agent and global mean/std across folds
         for K in range(K_min, K_max + 1, step):
-            ct_vals = metrics['CT'][K]
-            tw_vals = metrics['TW'][K]
-            row[f'CT_K{K}'] = float(sum(ct_vals) / len(ct_vals)) if ct_vals else None
-            row[f'TW_K{K}'] = float(sum(tw_vals) / len(tw_vals)) if tw_vals else None
-            for i, (ct_i, tw_i) in enumerate(zip(ct_vals, tw_vals)):
-                row[f'CT_K{K}_agent_{i}'] = float(ct_i)
-                row[f'TW_K{K}_agent_{i}'] = float(tw_i)
+            for i in range(n_agents):
+                ct_vals = [fold_metrics[f]['CT'][K][i] for f in range(n_folds)]
+                tw_vals = [fold_metrics[f]['TW'][K][i] for f in range(n_folds)]
+                row[f'CT_K{K}_agent_{i}'] = _mean(ct_vals)
+                row[f'CT_K{K}_agent_{i}_std'] = _std(ct_vals)
+                row[f'TW_K{K}_agent_{i}'] = _mean(tw_vals)
+                row[f'TW_K{K}_agent_{i}_std'] = _std(tw_vals)
 
-        # Global alignment metric
-        row['FOSCTTM'] = float(metrics['FOSCTTM']) if metrics['FOSCTTM'] is not None else None
+            # Global (agents averaged per fold, then fold stats)
+            fold_ct_means = [_mean(fold_metrics[f]['CT'][K]) for f in range(n_folds)]
+            fold_tw_means = [_mean(fold_metrics[f]['TW'][K]) for f in range(n_folds)]
+            row[f'CT_K{K}'] = _mean(fold_ct_means)
+            row[f'CT_K{K}_std'] = _std(fold_ct_means)
+            row[f'TW_K{K}'] = _mean(fold_tw_means)
+            row[f'TW_K{K}_std'] = _std(fold_tw_means)
 
-        total_loss = loss_metrics.get('total_loss', float('nan'))
+        # FOSCTTM: mean/std across folds (global metric, not per-agent)
+        foscttm_vals = [
+            fold_metrics[f]['FOSCTTM']
+            for f in range(n_folds)
+            if fold_metrics[f].get('FOSCTTM') is not None
+        ]
+        row['FOSCTTM'] = _mean(foscttm_vals) if foscttm_vals else None
+        row['FOSCTTM_std'] = _std(foscttm_vals) if len(foscttm_vals) > 1 else float('nan')
+
         print(
-            f'[{orch_name}] total_loss={total_loss:.4f}  '
-            f'KS={row["KS_mean"]:.4f}  FOSCTTM={row["FOSCTTM"]}'
+            f'[{orch_name}] KS={row["KS_mean"]:.4f}±{row["KS_std"]:.4f}  '
+            f'CT_K10={row["CT_K10"]:.4f}±{row["CT_K10_std"]:.4f}  '
+            f'FOSCTTM={row["FOSCTTM"]}'
         )
 
-        # --------------------------------------------------
-        # Persist per-orchestrator metrics and latent reps
-        # --------------------------------------------------
         save_orch_metrics(row, orch_dir)
-
-        print(f'[{orch_name}] Saving latent representations…')
-        try:
-            save_latent_representations(orchestrator, datamodule, orch_dir)
-        except Exception as exc:
-            print(f'[{orch_name}] Latent representation saving failed: {exc}')
-
         records.append(row)
 
     if not records:
         print('No orchestrators evaluated. Nothing to save.')
         return
 
-    # ===================================================
-    #   Aggregated summary across all orchestrators
-    # ===================================================
     df = pl.DataFrame(records)
     agg_path = results_subdir / 'eval_metrics.parquet'
     df.write_parquet(agg_path)
-
     print(f'\nSaved aggregated metrics → {agg_path}')
     print(df)
 
